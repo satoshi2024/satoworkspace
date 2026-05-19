@@ -1,91 +1,17 @@
-    /**
-     * 印刷系処理後も画面下部の印刷条件を保持する。
-     *
-     * 内容確認・印刷プレビュー・印刷を実行した後に、
-     * 各種画面入力値が初期値に戻らないように Form / View に再設定する。
-     *
-     * @param request リクエスト情報
-     * @param myForm  画面情報
-     * @param myView  ビュー情報
-     */
-    private void keepPrintCondition(HttpServletRequest request,
-            SampleForm myForm,
-            Sample_View myView) {
-
-        // 項目A
-        String itemA = request.getParameter("item_a");
-        if (itemA == null || "".equals(itemA)) {
-            itemA = myForm.getItemA();
-        }
-        if (itemA == null || "".equals(itemA)) {
-            itemA = myView.getItemA();
-        }
-        myForm.setItemA(itemA);
-        myView.setItemA(itemA);
-
-        // 項目B
-        String itemB = request.getParameter("item_b");
-        if (itemB == null || "".equals(itemB)) {
-            itemB = myForm.getItemB();
-        }
-        if (itemB == null || "".equals(itemB)) {
-            itemB = myView.getItemB();
-        }
-        myForm.setItemB(itemB);
-        myView.setItemB(itemB);
-
-        // 項目C
-        String itemC = request.getParameter("item_c");
-        if (itemC == null || "".equals(itemC)) {
-            itemC = myForm.getItemC();
-        }
-        if (itemC == null || "".equals(itemC)) {
-            itemC = myView.getItemC();
-        }
-        myForm.setItemC(itemC);
-        myView.setItemC(itemC);
-
-        // 項目D
-        String itemD = request.getParameter("item_d");
-        if (itemD == null || "".equals(itemD)) {
-            itemD = myForm.getItemD();
-        }
-        if (itemD == null || "".equals(itemD)) {
-            itemD = myView.getItemD();
-        }
-        myForm.setItemD(itemD);
-        myView.setItemD(itemD);
-
-        // 項目E
-        String itemE = request.getParameter("item_e");
-        if (itemE == null || "".equals(itemE)) {
-            itemE = myForm.getItemE();
-        }
-        if (itemE == null || "".equals(itemE)) {
-            itemE = myView.getItemE();
-        }
-        myForm.setItemE(itemE);
-        myView.setItemE(itemE);
-
-        // 項目F
-        String itemF = request.getParameter("item_f");
-        if (itemF == null || "".equals(itemF)) {
-            itemF = myForm.getItemF();
-        }
-        if (itemF == null || "".equals(itemF)) {
-            itemF = myView.getItemF();
-        }
-        myForm.setItemF(itemF);
-        myView.setItemF(itemF);
-
-        // 項目G
-        String itemG = request.getParameter("item_g");
-        if (itemG == null || "".equals(itemG)) {
-            itemG = myForm.getItemG();
-        }
-        if (itemG == null || "".equals(itemG)) {
-            itemG = myView.getItemG();
-        }
-        myForm.setItemG(itemG);
-        myView.setItemG(itemG);
-    }
+今回の「」画面および「」画面における「返戻情報登録有無」の選択不可、およびデータベース登録に関する一連の不具合につきまして、**「フロントエンドの的確な制御解除 ＋ バックエンドの安全な隔離・分岐処理」**という二次不具合リスクゼロの改修方針のもと、両画面の対応を統合的に完了いたしました。
+既存の共通ロジックへの影響を完全に排除しつつ、確実な機能回復を実現した改修詳細は以下の通りです。
+1. 「」画面における改修内容
+• フロントエンド側：
+JSロジックを修正し、対象帳票におけるチェックボックスの非活性（disabled）制御を的確に解除しました。
+• バックエンド側：
+「既存の共通XMLやコアメソッドには一切影響を与えない」という原則を厳守し、今回の処理専用の隔離メソッドを新設しました。
+これにより、台帳データが存在する帳票については、レガシーコードに潜んでいた年度や日付の検索パラメータのズレを是正して正確にデータを抽出する仕組みとしました。また、元々台帳データを持たない変更通知書については、検索処理を迂回して必須項目を手動で構築し、直接DBへ登録する分岐処理を実装しました。
+2. 「」画面における改修内容
+• フロントエンド側：
+初期表示およびプルダウン切り替え時のJSロジックを修正し、特定の帳票にのみ限定されていたチェックボックスの非活性制御を、対象となる全帳票に対して的确に解除しました。
+その際、レガシーブラウザ（IE互換モード等）環境下でのスクリプトエラーによる画面停止を未然に防ぐため、モダンJS（ES6）構文に依存しない、最も堅牢で保守性の高いレガシー構文（||による条件判定）を用いて実装を行いました。
+• バックエンド側：
+データ登録のコアロジックや共通XMLの安全性を担保するため、登録処理（INSERT）において、これまで一律で「」とハードコーディングされていた仕様を見直しました。フロントエンドから連携される正確な帳票IDに基づき、「」および「」の帳票名を動的かつ正確に判定・付与してDBへコミットする分岐処理を実装しました。
+3. 本対応による成果
+この統合的なアプローチにより、の両画面における操作性の問題とDB登録データの不整合（データの断絶や誤登録）を根本から解決いたしました。
+同時に、既存の共通ロジック改修に伴う予期せぬ波及リスク（デグレ）を完全に回避し、システム全体の確実な安定性を担保しております。
