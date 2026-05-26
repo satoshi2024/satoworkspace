@@ -1,65 +1,7 @@
-import java.util.List;
 
-/**
- * 選択中の帳票番号に一致する帳票設定情報を取得する。
- */
-private ReportDetail findReportInfo(ReportForm mainForm, String selectedReportNo) {
-
-    ReportDetail info = null;
-
-    // 1つ目のリストから検索
-    info = findReportInfoFromList(mainForm.getReportListA(), selectedReportNo);
-    if (info != null) {
-        return info;
-    }
-
-    // 2つ目のリストから検索
-    info = findReportInfoFromList(mainForm.getReportListB(), selectedReportNo);
-    if (info != null) {
-        return info;
-    }
-
-    // 3つ目のリストから検索
-    info = findReportInfoFromList(mainForm.getReportListC(), selectedReportNo);
-    if (info != null) {
-        return info;
-    }
-
-    return null;
-}
-
-/**
- * 帳票リストから帳票番号が一致する情報を取得する。
- */
-private ReportDetail findReportInfoFromList(List<ReportDetail> reportList, String selectedReportNo) {
-
-    if (reportList == null || selectedReportNo == null) {
-        return null;
-    }
-
-    // 元のループ処理（型安全に修正）
-    for (ReportDetail info : reportList) {
-        if (info != null && isSameReportNo(selectedReportNo, info.getReportId())) {
-            return info;
-        }
-    }
-
-    return null;
-}
-
-/**
- * 帳票番号比較。
- * "319" と "0319" のような差異を吸収する。
- */
-private boolean isSameReportNo(String no1, String no2) {
-
-    if (no1 == null || no2 == null) {
-        return false;
-    }
-
-    try {
-        return Long.parseLong(no1) == Long.parseLong(no2);
-    } catch (NumberFormatException e) {
-        return no1.equals(no2);
-    }
-}
+> お疲れ様です。
+> QAの内容（事象の説明）についてお伺いします。
+> こちらのチケットについて開発（または対応）チーム内で確認と議論を行いましたが、記載されているご依頼の意図や具体的な要件が正しく理解できておりません。
+> 大変恐れ入りますが、どのような課題があり、具体的にどのような動作（対応）を希望されているのか、もう少し詳細を補足・ご確認いただけないでしょうか。
+> お手数をおかけしますが、よろしくお願いいたします。
+> 
