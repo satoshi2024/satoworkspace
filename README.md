@@ -8,9 +8,9 @@ from tkinter import filedialog, messagebox, scrolledtext
 import openpyxl
 from openpyxl.utils.cell import column_index_from_string, get_column_letter
 
-def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, target_sheet, added_col, log_widget):
+def process_v8_mapping(old_csv_path, old_excel_path, new_excel_path, target_sheet, log_widget):
     try:
-        log_widget.insert(tk.END, f"【1/4】正在加载 Excel 文件，请稍候...\n")
+        log_widget.insert(tk.END, f"【1/4】正在加载 Excel 文件...\n")
         log_widget.update()
         
         wb_old = openpyxl.load_workbook(old_excel_path, data_only=True)
@@ -27,9 +27,9 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
         max_r = max(ws_old.max_row, ws_new.max_row) + 10
 
         # ==========================================
-        # 1. 常规 Diff：对比新旧 Excel 的物理结构差异 (追踪平移)
+        # 1. 物理差异对比 (V4 核心：追踪平移)
         # ==========================================
-        log_widget.insert(tk.END, f"【2/4】正在对比物理结构并启动 V4 表头侦测...\n")
+        log_widget.insert(tk.END, f"【2/4】正在比对物理结构与侦测最新表头...\n")
         log_widget.update()
 
         def get_col_sig(ws, col_idx):
@@ -37,8 +37,7 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
             for r in range(1, 51):
                 val = ws.cell(row=r, column=col_idx).value
                 val_str = str(val).replace(" ", "").replace("　", "").strip() if val is not None else ""
-                # 抹除数字干扰，保证只比对汉字结构
-                val_str = re.sub(r'[\(（]\s*\d+\s*[\)）]', '', val_str)
+                val_str = re.sub(r'[\(（]\s*\d+\s*[\)）]', '', val_str) # 抹除数字，比对结构
                 vals.append(val_str)
             return "|".join(vals)
 
@@ -71,19 +70,16 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
                     row_map[old_i + 1] = new_j + 1
 
         # ==========================================
-        # 2. V4 核心：扫描新表头逻辑列号及行番号字典
+        # 2. 扫描新 Excel 的绝对坐标 (用于补全缺失数据)
         # ==========================================
         new_col_to_logic_id = {}
-        logic_id_to_new_col = {} # 用于跨页抓取
         for c in range(1, max_c):
             for r in range(1, 30):
                 val = ws_new.cell(row=r, column=c).value
                 if val is not None:
                     m = re.search(r'^[\(（]\s*(\d+)\s*[\)）]$', str(val).strip())
                     if m:
-                        logic_num = int(m.group(1))
-                        new_col_to_logic_id[c] = logic_num
-                        logic_id_to_new_col[logic_num] = c
+                        new_col_to_logic_id[c] = int(m.group(1))
                         break
 
         logic_row_to_phys_row = {}
@@ -104,31 +100,39 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
                     if v_str.isdigit() and 1 <= int(v_str) <= 99:
                         logic_row_to_phys_row[v_str.zfill(2)] = r
 
-        log_widget.insert(tk.END, f"➔ 侦测到 {len(new_col_to_logic_id)} 个显式表头！\n\n")
+        log_widget.insert(tk.END, f"➔ 找到 {len(logic_row_to_phys_row)} 个行番号，{len(new_col_to_logic_id)} 个显式列名。\n\n")
 
         # ==========================================
-        # 3. 读取 CSV，融合 V4 改名与定向跨页抓取
+        # 3. 读取 CSV，执行 V4 追踪 + 追加新列
         # ==========================================
-        log_widget.insert(tk.END, f"【3/4】正在更新映射 (结合表头纠正与跨页迁移)...\n")
+        log_widget.insert(tk.END, f"【3/4】正在更新 CSV 并智能补全新坐标...\n")
         
         with open(old_csv_path, mode='r', encoding='utf-8-sig', newline='') as f:
             csv_data = list(csv.reader(f))
             
-        # 提取业务前缀 (例如 '55')
+        # 提取业务前缀 (例如 '9', '55')。逻辑ID结构: 前缀 + 行(2位) + 列(2位)
         prefixes = {}
         for row in csv_data:
             if len(row) >= 3 and row[1].strip() == str(target_sheet):
                 id_val = row[0].strip()
                 if id_val.isdigit() and len(id_val) >= 4:
-                    prefixes[id_val[:-4]] = prefixes.get(id_val[:-4], 0) + 1
+                    prefix = id_val[:-4] # 截掉最后的行和列
+                    prefixes[prefix] = prefixes.get(prefix, 0) + 1
+                    
         target_prefix = max(prefixes, key=prefixes.get) if prefixes else None
+        
+        if not target_prefix:
+            log_widget.insert(tk.END, f"⚠️ 警告: 无法从 CSV 推断该 Sheet 的 ID 前缀，可能无法执行自动补全。\n")
 
         output_csv_path = old_csv_path.replace(".csv", "_Updated.csv")
         new_rows = []
         updated_count = 0
         deleted_count = 0
-        migrated_count = 0
         
+        # 记录我们成功存活/更新下来的所有逻辑 ID
+        processed_active_ids = set()
+        
+        # 第一轮：执行 V4 追踪与更新老数据
         for row in csv_data:
             if len(row) < 3:
                 new_rows.append(row)
@@ -136,24 +140,6 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
                 
             id_val, sheet_val, old_cell = row[0].strip(), row[1].strip(), row[2].strip()
             
-            # --- 场景 A: 定向跨页抓取 (你输入的追加列) ---
-            if added_col and target_prefix and id_val.startswith(target_prefix) and id_val.endswith(added_col.zfill(2)):
-                target_c_idx = logic_id_to_new_col.get(int(added_col))
-                target_r_phys = logic_row_to_phys_row.get(id_val[-4:-2])
-                
-                if target_c_idx and target_r_phys:
-                    new_cell = f"{get_column_letter(target_c_idx)}{target_r_phys}"
-                    new_rows.append([id_val, str(target_sheet), new_cell])
-                    
-                    if sheet_val != str(target_sheet):
-                        migrated_count += 1
-                        log_widget.insert(tk.END, f" 🚀 [跨页迁移] ID:{id_val} | Sheet {sheet_val} ➔ {target_sheet} | 坐标 ➔ {new_cell}\n")
-                    else:
-                        updated_count += 1
-                        log_widget.insert(tk.END, f" 🔄 [同页更新] ID:{id_val} | 坐标 ➔ {new_cell}\n")
-                    continue
-
-            # --- 场景 B: 正常页内追踪与 V4 改名 ---
             if sheet_val == str(target_sheet) and id_val.isdigit() and len(id_val) >= 4:
                 match = re.match(r"([a-zA-Z]+)(\d+)", old_cell)
                 if match:
@@ -161,14 +147,11 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
                     old_col_idx = column_index_from_string(col_str)
                     old_row_idx = int(row_str)
                     
-                    # 1. 使用 Diff 追踪它物理漂移到了哪里
                     new_col_idx = col_map.get(old_col_idx)
                     new_row_idx = row_map.get(old_row_idx)
                     
                     if new_col_idx and new_row_idx:
                         new_cell = f"{get_column_letter(new_col_idx)}{new_row_idx}"
-                        
-                        # 2. V4 绝杀：抬头看这列现在叫什么名字？
                         detected_logic_num = new_col_to_logic_id.get(new_col_idx)
                         
                         if detected_logic_num is not None:
@@ -177,19 +160,35 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
                             new_id_val = id_val
                             
                         new_rows.append([new_id_val, sheet_val, new_cell])
+                        processed_active_ids.add(new_id_val)
                         
                         if new_id_val != id_val or old_cell != new_cell:
                             updated_count += 1
-                            log_widget.insert(tk.END, f" 🎯 [V4精准追踪] ID: {id_val} ➔ {new_id_val} | 坐标: {old_cell} ➔ {new_cell}\n")
+                            log_widget.insert(tk.END, f" 🔄 [追踪更新] ID: {id_val} ➔ {new_id_val} | {old_cell} ➔ {new_cell}\n")
                     else:
                         deleted_count += 1
-                        log_widget.insert(tk.END, f" ❌ [结构删除] ID:{id_val} | 原坐标 {old_cell} 已被彻底删除。\n")
+                        log_widget.insert(tk.END, f" ❌ [结构删除] ID:{id_val} 的区域已被物理删除。\n")
                 else:
                     new_rows.append(row)
             else:
-                # 不受影响的数据
                 new_rows.append(row)
-                
+
+        # 第二轮：智能补全 (如果 Excel 里有，但刚才没更新到，说明是全新的！)
+        added_count = 0
+        if target_prefix:
+            for phys_col, logic_col_num in new_col_to_logic_id.items():
+                col_letter = get_column_letter(phys_col)
+                for logic_row_str, phys_row in logic_row_to_phys_row.items():
+                    expected_id = f"{target_prefix}{logic_row_str}{logic_col_num:02d}"
+                    expected_cell = f"{col_letter}{phys_row}"
+                    
+                    # 绝杀：如果这个理论上应该存在的 ID，不在我们刚才处理过的名单里，追加它！
+                    if expected_id not in processed_active_ids:
+                        new_rows.append([expected_id, str(target_sheet), expected_cell])
+                        added_count += 1
+                        processed_active_ids.add(expected_id) # 防止重复
+                        log_widget.insert(tk.END, f" ➕ [智能新增] 发现新列/缺失坐标，追加: {expected_id} ➔ {expected_cell}\n")
+
         # ==========================================
         # 4. 导出结果
         # ==========================================
@@ -202,9 +201,9 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
         shutil.copyfile(output_csv_path, old_csv_path)
         os.remove(output_csv_path)
             
-        log_widget.insert(tk.END, f"\n✅ 【处理成功】\nV4 表头改名与追踪: {updated_count} 个\n跨页定向迁移: {migrated_count} 个\n失效删除: {deleted_count} 个\n")
+        log_widget.insert(tk.END, f"\n✅ 【处理成功】\n追踪旧坐标更新: {updated_count} 个\n自动侦测并新增: {added_count} 个\n物理废弃并删除: {deleted_count} 个\n")
         log_widget.see(tk.END)
-        messagebox.showinfo("成功", f"Sheet [{target_sheet}] 融合修正完成！\n\n表头追踪修正: {updated_count}\n跨页强制迁移: {migrated_count}\n废弃删除: {deleted_count}")
+        messagebox.showinfo("成功", f"Sheet [{target_sheet}] 处理完成！\n\n追踪更新: {updated_count}\n新增补全: {added_count}\n失效删除: {deleted_count}")
         
     except Exception as e:
         messagebox.showerror("系统错误", f"处理过程中发生异常:\n{str(e)}")
@@ -212,8 +211,8 @@ def process_ultimate_mapping(old_csv_path, old_excel_path, new_excel_path, targe
 class DynamicUpdaterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("坐标映射智能引擎 (V4表头侦测 + 跨页抓取版)")
-        self.root.geometry("750x680")
+        self.root.title("坐标映射引擎 (V8 精准定位+智能新增版)")
+        self.root.geometry("750x600")
         
         def create_file_picker(parent, label_text, file_types):
             tk.Label(parent, text=label_text, font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(8, 2))
@@ -229,18 +228,11 @@ class DynamicUpdaterApp:
         self.old_xl_entry = create_file_picker(root, "2. 请选择【原本】未修改的 Excel 文件 (.xlsm/.xlsx):", [("Excel Files", "*.xlsm *.xlsx")])
         self.new_xl_entry = create_file_picker(root, "3. 请选择【改修后】最新的 Excel 文件 (.xlsm/.xlsx):", [("Excel Files", "*.xlsm *.xlsx")])
         
-        input_frame = tk.Frame(root)
-        input_frame.pack(fill="x", padx=15, pady=8)
+        tk.Label(root, text="4. 目标 Sheet 名称 (例如: 47):", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(8, 2))
+        self.sheet_entry = tk.Entry(root, width=25, font=("Calibri", 11, "bold"), fg="blue")
+        self.sheet_entry.pack(anchor="w", padx=15, pady=2)
         
-        tk.Label(input_frame, text="4. 目标 Sheet (如 47):", font=("MS Gothic", 9, "bold")).pack(side="left")
-        self.sheet_entry = tk.Entry(input_frame, width=10, font=("Calibri", 11, "bold"), fg="blue")
-        self.sheet_entry.pack(side="left", padx=5)
-        
-        tk.Label(input_frame, text="5. 需定向抓取的跨页列号(选填, 如 30):", font=("MS Gothic", 9, "bold")).pack(side="left", padx=(20, 0))
-        self.col_entry = tk.Entry(input_frame, width=10, font=("Calibri", 11, "bold"), fg="red")
-        self.col_entry.pack(side="left", padx=5)
-        
-        self.btn_start = tk.Button(root, text="🚀 启动表头侦测与跨页抓取", bg="#0078D7", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
+        self.btn_start = tk.Button(root, text="🚀 启动结构追踪与自动补全新列", bg="#0078D7", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
         self.btn_start.pack(fill="x", padx=15, pady=15, ipady=5)
         
         tk.Label(root, text="执行日志:", font=("MS Gothic", 9)).pack(anchor="w", padx=15)
@@ -258,14 +250,13 @@ class DynamicUpdaterApp:
         old_xl = self.old_xl_entry.get().strip()
         new_xl = self.new_xl_entry.get().strip()
         sheet_n = self.sheet_entry.get().strip()
-        add_col = self.col_entry.get().strip()
         
         if not all([csv_p, old_xl, new_xl, sheet_n]):
             messagebox.showwarning("提示", "请完整选择 3 个文件并填写 Sheet 名称！")
             return
             
         self.log_text.delete(1.0, tk.END)
-        process_ultimate_mapping(csv_p, old_xl, new_xl, sheet_n, add_col, self.log_text)
+        process_v8_mapping(csv_p, old_xl, new_xl, sheet_n, self.log_text)
 
 if __name__ == "__main__":
     app_root = tk.Tk()
