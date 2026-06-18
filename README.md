@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, scrolledtext
 import openpyxl
 from openpyxl.utils.cell import column_index_from_string, get_column_letter
 
-def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_sheet, added_col, log_widget):
+def process_v12_mapping(old_csv_path, old_excel_path, new_excel_path, target_sheet, added_col, log_widget):
     try:
         log_widget.insert(tk.END, f"【1/4】正在加载 Excel 文件...\n")
         log_widget.update()
@@ -27,7 +27,7 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
         max_r = max(ws_old.max_row, ws_new.max_row) + 10
 
         # ==========================================
-        # 1. 结构比对 (V4引擎：追踪平移)
+        # 1. 结构比对 (V4引擎：计算物理偏移量)
         # ==========================================
         log_widget.insert(tk.END, f"【2/4】正在比对物理结构与侦测最新表头...\n")
         log_widget.update()
@@ -73,7 +73,7 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
         # 2. 精准表头侦测 (兼容全角数字)
         # ==========================================
         new_col_to_logic_id = {}
-        target_phys_col = None # 如果输入了30，记录30在Excel的物理列
+        target_phys_col = None 
         
         for c in range(1, max_c):
             for r in range(1, 50):
@@ -88,43 +88,37 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
                             target_phys_col = c
                         break
 
-        logic_row_to_phys_row = {}
-        id_col_idx = None
-        for r in range(1, 40):
-            for c in range(1, 20):
-                val = ws_new.cell(row=r, column=c).value
-                if val and "行番号" in str(val).replace(" ", ""):
-                    id_col_idx = c
-                    break
-            if id_col_idx: break
-            
-        if id_col_idx:
-            for r in range(1, ws_new.max_row + 1):
-                val = ws_new.cell(row=r, column=id_col_idx).value
-                if val is not None:
-                    v_str = str(val).strip()
-                    if v_str.isdigit() and 1 <= int(v_str) <= 99:
-                        logic_row_to_phys_row[v_str.zfill(2)] = r
-
         # ==========================================
-        # 3. 严格校验 CSV：提取 B 列为当前 Sheet 的所有前缀
+        # 3. 提取 CSV 历史数据的物理锚点 (彻底抛弃 Excel 读取行号)
         # ==========================================
-        log_widget.insert(tk.END, f"【3/4】正在严格校验 CSV 历史数据...\n")
+        log_widget.insert(tk.END, f"【3/4】正在严格校验 CSV 并提取物理锚点...\n")
         
         with open(old_csv_path, mode='r', encoding='utf-8-sig', newline='') as f:
             csv_data = list(csv.reader(f))
             
-        target_sheet_row_prefixes = set() # 例如收集到 {'5501', '5502', '5503'}
+        target_sheet_row_prefixes = set() 
+        logic_base_to_phys_row = {} # 核心：记忆 5501 -> 第14行
         
         for row in csv_data:
             if len(row) >= 3 and row[1].strip() == str(target_sheet):
-                id_val = row[0].strip()
+                id_val, old_cell = row[0].strip(), row[2].strip()
                 if id_val.isdigit() and len(id_val) >= 4:
-                    target_sheet_row_prefixes.add(id_val[:-2]) # 截取掉最后两位列号，剩下的就是行前缀
+                    prefix = id_val[:-2]
+                    target_sheet_row_prefixes.add(prefix)
                     
+                    # 利用老坐标结合平移量，算出它现在在第几行
+                    match = re.match(r"([a-zA-Z]+)(\d+)", old_cell)
+                    if match:
+                        old_row_idx = int(match.group(2))
+                        new_row_idx = row_map.get(old_row_idx)
+                        if new_row_idx:
+                            logic_base_to_phys_row[prefix] = new_row_idx
+                            
         if not target_sheet_row_prefixes:
             messagebox.showerror("错误", f"在 CSV 中完全找不到 B 列为 {target_sheet} 的数据！")
             return
+            
+        log_widget.insert(tk.END, f"➔ 成功锁定 {len(logic_base_to_phys_row)} 个行锚点。\n\n")
 
         # ==========================================
         # 4. 执行更新、跨页拉取 与 精确追加
@@ -139,7 +133,7 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
         deleted_count = 0
         migrated_count = 0
         
-        has_target_col = False # 核心校验：CSV的当前体系里，有没有这个目标列？
+        has_target_col = False
         added_col_padded = added_col.zfill(2) if added_col else ""
 
         for row in csv_data:
@@ -150,16 +144,14 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
             id_val, sheet_val, old_cell = row[0].strip(), row[1].strip(), row[2].strip()
             
             # --- 场景 A：跨页拉取 ---
-            # 如果这个 ID 的前缀属于 47 页，且结尾刚好是我们输入的 30，但是它 B 列写着 48 页
             if added_col and id_val.endswith(added_col_padded) and id_val[:-2] in target_sheet_row_prefixes:
                 if sheet_val != str(target_sheet):
-                    logic_row_str = id_val[-4:-2]
-                    phys_row = logic_row_to_phys_row.get(logic_row_str)
+                    phys_row = logic_base_to_phys_row.get(id_val[:-2])
                     
                     if target_phys_col and phys_row:
                         new_cell = f"{get_column_letter(target_phys_col)}{phys_row}"
                         target_sheet_rows.append([id_val, str(target_sheet), new_cell])
-                        has_target_col = True # 标记：通过跨页拉取找到了！不需要追加
+                        has_target_col = True 
                         migrated_count += 1
                         log_widget.insert(tk.END, f" 🚀 [跨页拉取] ID:{id_val} | Sheet {sheet_val} ➔ {target_sheet} | 坐标 ➔ {new_cell}\n")
                         continue
@@ -167,7 +159,7 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
             # --- 场景 B：正常当前 Sheet 更新 ---
             if sheet_val == str(target_sheet) and id_val.isdigit() and len(id_val) >= 4:
                 if added_col and id_val.endswith(added_col_padded):
-                    has_target_col = True # 标记：A列里本来就有，不需要追加！
+                    has_target_col = True 
                     
                 match = re.match(r"([a-zA-Z]+)(\d+)", old_cell)
                 if match:
@@ -201,14 +193,11 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
 
         # --- 场景 C：严格校验后的精确追加 ---
         added_count = 0
-        # 如果你输入了目标列，且这列在 Excel 里扫到了，但是！刚才我们查遍了 CSV 都没找到它
         if added_col and not has_target_col and target_phys_col:
             log_widget.insert(tk.END, f"\n 💡 校验完毕：CSV 中未发现 {added_col} 列数据，开始精确追加...\n")
             
-            # 严格按照 CSV 里真实存在的行前缀（5501, 5502...）进行繁衍，绝不乱加
             for row_prefix in sorted(target_sheet_row_prefixes):
-                logic_row_str = row_prefix[-2:]
-                phys_row = logic_row_to_phys_row.get(logic_row_str)
+                phys_row = logic_base_to_phys_row.get(row_prefix)
                 
                 if phys_row:
                     new_id = f"{row_prefix}{added_col_padded}"
@@ -218,7 +207,7 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
                     log_widget.insert(tk.END, f" ➕ [全新列追加] 生成: {new_id} ➔ {new_cell}\n")
 
         # ==========================================
-        # 5. 全局排版合并 (确保追加的在正确位置)
+        # 5. 全局排版合并
         # ==========================================
         final_rows = target_sheet_rows + other_sheet_rows
         final_rows = [row for row in final_rows if row and any(row)]
@@ -242,7 +231,7 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
 class DynamicUpdaterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("坐标映射引擎 (V11 严谨输入校验版)")
+        self.root.title("坐标映射引擎 (V12 锚点修复版)")
         self.root.geometry("750x680")
         
         def create_file_picker(parent, label_text, file_types):
@@ -295,7 +284,7 @@ class DynamicUpdaterApp:
             return
             
         self.log_text.delete(1.0, tk.END)
-        process_strict_mapping(csv_p, old_xl, new_xl, sheet_n, add_col, self.log_text)
+        process_v12_mapping(csv_p, old_xl, new_xl, sheet_n, add_col, self.log_text)
 
 if __name__ == "__main__":
     app_root = tk.Tk()
