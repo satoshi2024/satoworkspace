@@ -79,4 +79,225 @@ def process_strict_mapping(old_csv_path, old_excel_path, new_excel_path, target_
             for r in range(1, 50):
                 val = ws_new.cell(row=r, column=c).value
                 if val is not None:
-                    v_str = str(val).translate(str.maketrans('０１２３４５６７８９', '0123456789')).replace(" ", "").replace("　", "").
+                    v_str = str(val).translate(str.maketrans('０１２３４５６７８９', '0123456789')).replace(" ", "").replace("　", "").strip()
+                    m = re.search(r'[\(（](\d+)[\)）]', v_str)
+                    if m:
+                        logic_num = int(m.group(1))
+                        new_col_to_logic_id[c] = logic_num
+                        if added_col and logic_num == int(added_col):
+                            target_phys_col = c
+                        break
+
+        logic_row_to_phys_row = {}
+        id_col_idx = None
+        for r in range(1, 40):
+            for c in range(1, 20):
+                val = ws_new.cell(row=r, column=c).value
+                if val and "行番号" in str(val).replace(" ", ""):
+                    id_col_idx = c
+                    break
+            if id_col_idx: break
+            
+        if id_col_idx:
+            for r in range(1, ws_new.max_row + 1):
+                val = ws_new.cell(row=r, column=id_col_idx).value
+                if val is not None:
+                    v_str = str(val).strip()
+                    if v_str.isdigit() and 1 <= int(v_str) <= 99:
+                        logic_row_to_phys_row[v_str.zfill(2)] = r
+
+        # ==========================================
+        # 3. 严格校验 CSV：提取 B 列为当前 Sheet 的所有前缀
+        # ==========================================
+        log_widget.insert(tk.END, f"【3/4】正在严格校验 CSV 历史数据...\n")
+        
+        with open(old_csv_path, mode='r', encoding='utf-8-sig', newline='') as f:
+            csv_data = list(csv.reader(f))
+            
+        target_sheet_row_prefixes = set() # 例如收集到 {'5501', '5502', '5503'}
+        
+        for row in csv_data:
+            if len(row) >= 3 and row[1].strip() == str(target_sheet):
+                id_val = row[0].strip()
+                if id_val.isdigit() and len(id_val) >= 4:
+                    target_sheet_row_prefixes.add(id_val[:-2]) # 截取掉最后两位列号，剩下的就是行前缀
+                    
+        if not target_sheet_row_prefixes:
+            messagebox.showerror("错误", f"在 CSV 中完全找不到 B 列为 {target_sheet} 的数据！")
+            return
+
+        # ==========================================
+        # 4. 执行更新、跨页拉取 与 精确追加
+        # ==========================================
+        log_widget.insert(tk.END, f"【4/4】开始安全更新与排版追加...\n")
+        
+        output_csv_path = old_csv_path.replace(".csv", "_Updated.csv")
+        target_sheet_rows = []
+        other_sheet_rows = []
+        
+        updated_count = 0
+        deleted_count = 0
+        migrated_count = 0
+        
+        has_target_col = False # 核心校验：CSV的当前体系里，有没有这个目标列？
+        added_col_padded = added_col.zfill(2) if added_col else ""
+
+        for row in csv_data:
+            if len(row) < 3:
+                other_sheet_rows.append(row)
+                continue
+                
+            id_val, sheet_val, old_cell = row[0].strip(), row[1].strip(), row[2].strip()
+            
+            # --- 场景 A：跨页拉取 ---
+            # 如果这个 ID 的前缀属于 47 页，且结尾刚好是我们输入的 30，但是它 B 列写着 48 页
+            if added_col and id_val.endswith(added_col_padded) and id_val[:-2] in target_sheet_row_prefixes:
+                if sheet_val != str(target_sheet):
+                    logic_row_str = id_val[-4:-2]
+                    phys_row = logic_row_to_phys_row.get(logic_row_str)
+                    
+                    if target_phys_col and phys_row:
+                        new_cell = f"{get_column_letter(target_phys_col)}{phys_row}"
+                        target_sheet_rows.append([id_val, str(target_sheet), new_cell])
+                        has_target_col = True # 标记：通过跨页拉取找到了！不需要追加
+                        migrated_count += 1
+                        log_widget.insert(tk.END, f" 🚀 [跨页拉取] ID:{id_val} | Sheet {sheet_val} ➔ {target_sheet} | 坐标 ➔ {new_cell}\n")
+                        continue
+
+            # --- 场景 B：正常当前 Sheet 更新 ---
+            if sheet_val == str(target_sheet) and id_val.isdigit() and len(id_val) >= 4:
+                if added_col and id_val.endswith(added_col_padded):
+                    has_target_col = True # 标记：A列里本来就有，不需要追加！
+                    
+                match = re.match(r"([a-zA-Z]+)(\d+)", old_cell)
+                if match:
+                    col_str, row_str = match.groups()
+                    old_col_idx = column_index_from_string(col_str)
+                    old_row_idx = int(row_str)
+                    
+                    new_col_idx = col_map.get(old_col_idx)
+                    new_row_idx = row_map.get(old_row_idx)
+                    
+                    if new_col_idx and new_row_idx:
+                        new_cell = f"{get_column_letter(new_col_idx)}{new_row_idx}"
+                        detected_logic_num = new_col_to_logic_id.get(new_col_idx)
+                        
+                        if detected_logic_num is not None:
+                            new_id_val = f"{id_val[:-2]}{detected_logic_num:02d}"
+                        else:
+                            new_id_val = id_val
+                            
+                        target_sheet_rows.append([new_id_val, sheet_val, new_cell])
+                        if new_id_val != id_val or old_cell != new_cell:
+                            updated_count += 1
+                            log_widget.insert(tk.END, f" 🔄 [追踪更新] {id_val} ➔ {new_id_val} | {old_cell} ➔ {new_cell}\n")
+                    else:
+                        deleted_count += 1
+                        log_widget.insert(tk.END, f" ❌ [废弃删除] {id_val} 原坐标已物理删除。\n")
+                else:
+                    target_sheet_rows.append(row)
+            else:
+                other_sheet_rows.append(row)
+
+        # --- 场景 C：严格校验后的精确追加 ---
+        added_count = 0
+        # 如果你输入了目标列，且这列在 Excel 里扫到了，但是！刚才我们查遍了 CSV 都没找到它
+        if added_col and not has_target_col and target_phys_col:
+            log_widget.insert(tk.END, f"\n 💡 校验完毕：CSV 中未发现 {added_col} 列数据，开始精确追加...\n")
+            
+            # 严格按照 CSV 里真实存在的行前缀（5501, 5502...）进行繁衍，绝不乱加
+            for row_prefix in sorted(target_sheet_row_prefixes):
+                logic_row_str = row_prefix[-2:]
+                phys_row = logic_row_to_phys_row.get(logic_row_str)
+                
+                if phys_row:
+                    new_id = f"{row_prefix}{added_col_padded}"
+                    new_cell = f"{get_column_letter(target_phys_col)}{phys_row}"
+                    target_sheet_rows.append([new_id, str(target_sheet), new_cell])
+                    added_count += 1
+                    log_widget.insert(tk.END, f" ➕ [全新列追加] 生成: {new_id} ➔ {new_cell}\n")
+
+        # ==========================================
+        # 5. 全局排版合并 (确保追加的在正确位置)
+        # ==========================================
+        final_rows = target_sheet_rows + other_sheet_rows
+        final_rows = [row for row in final_rows if row and any(row)]
+        final_rows.sort(key=lambda x: str(x[0]).strip())
+
+        with open(output_csv_path, mode='w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerows(final_rows)
+            
+        shutil.copyfile(old_csv_path, old_csv_path + ".bak")
+        shutil.copyfile(output_csv_path, old_csv_path)
+        os.remove(output_csv_path)
+            
+        log_widget.insert(tk.END, f"\n✅ 【处理成功】\n常规更新: {updated_count} 个\n跨页拉取: {migrated_count} 个\n校验后追加: {added_count} 个\n")
+        log_widget.see(tk.END)
+        messagebox.showinfo("成功", f"Sheet [{target_sheet}] 严格校验处理完成！\n\n更新: {updated_count}\n拉取: {migrated_count}\n追加: {added_count}\n\n已自动全局排序。")
+        
+    except Exception as e:
+        messagebox.showerror("系统错误", f"处理过程中发生异常:\n{str(e)}")
+
+class DynamicUpdaterApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("坐标映射引擎 (V11 严谨输入校验版)")
+        self.root.geometry("750x680")
+        
+        def create_file_picker(parent, label_text, file_types):
+            tk.Label(parent, text=label_text, font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(8, 2))
+            frame = tk.Frame(parent)
+            frame.pack(fill="x", padx=15)
+            entry = tk.Entry(frame, font=("Calibri", 10))
+            entry.pack(side="left", fill="x", expand=True, ipady=3)
+            btn = tk.Button(frame, text="浏览...", width=10, command=lambda: self.browse_file(entry, file_types))
+            btn.pack(side="right", padx=5)
+            return entry
+
+        self.csv_entry = create_file_picker(root, "1. 请选择【原本】的映射 CSV 文件:", [("CSV Files", "*.csv")])
+        self.old_xl_entry = create_file_picker(root, "2. 请选择【原本】未修改的 Excel 文件:", [("Excel Files", "*.xlsm *.xlsx")])
+        self.new_xl_entry = create_file_picker(root, "3. 请选择【改修后】最新的 Excel 文件:", [("Excel Files", "*.xlsm *.xlsx")])
+        
+        input_frame = tk.Frame(root)
+        input_frame.pack(fill="x", padx=15, pady=8)
+        
+        tk.Label(input_frame, text="4. 目标 Sheet (如 47):", font=("MS Gothic", 9, "bold")).pack(side="left")
+        self.sheet_entry = tk.Entry(input_frame, width=10, font=("Calibri", 11, "bold"), fg="blue")
+        self.sheet_entry.pack(side="left", padx=5)
+        
+        tk.Label(input_frame, text="5. 需校验/追加的列号 (选填,如 30):", font=("MS Gothic", 9, "bold")).pack(side="left", padx=(20, 0))
+        self.col_entry = tk.Entry(input_frame, width=10, font=("Calibri", 11, "bold"), fg="red")
+        self.col_entry.pack(side="left", padx=5)
+        
+        self.btn_start = tk.Button(root, text="🚀 校验 CSV AB列并精确处理", bg="#0078D7", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
+        self.btn_start.pack(fill="x", padx=15, pady=15, ipady=5)
+        
+        tk.Label(root, text="执行日志:", font=("MS Gothic", 9)).pack(anchor="w", padx=15)
+        self.log_text = scrolledtext.ScrolledText(root, height=12, font=("Consolas", 10), bg="#1E1E1E", fg="#D4D4D4")
+        self.log_text.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+        
+    def browse_file(self, entry_widget, file_types):
+        path = filedialog.askopenfilename(filetypes=file_types)
+        if path:
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, path)
+            
+    def start_process(self):
+        csv_p = self.csv_entry.get().strip()
+        old_xl = self.old_xl_entry.get().strip()
+        new_xl = self.new_xl_entry.get().strip()
+        sheet_n = self.sheet_entry.get().strip()
+        add_col = self.col_entry.get().strip()
+        
+        if not all([csv_p, old_xl, new_xl, sheet_n]):
+            messagebox.showwarning("提示", "请填写前 4 项必填内容！")
+            return
+            
+        self.log_text.delete(1.0, tk.END)
+        process_strict_mapping(csv_p, old_xl, new_xl, sheet_n, add_col, self.log_text)
+
+if __name__ == "__main__":
+    app_root = tk.Tk()
+    app = DynamicUpdaterApp(app_root)
+    app_root.mainloop()
