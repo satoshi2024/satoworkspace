@@ -2,160 +2,151 @@ import os
 import re
 import csv
 import shutil
-import difflib
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 import openpyxl
-from openpyxl.utils.cell import column_index_from_string, get_column_letter
+from openpyxl.utils.cell import get_column_letter
 
-def process_dynamic_mapping(old_csv_path, old_excel_path, new_excel_path, target_sheet, log_widget):
+def process_reconstruction_mapping(old_csv_path, old_excel_path, new_excel_path, target_sheet, log_widget):
     try:
-        log_widget.insert(tk.END, f"【1/4】正在加载 Excel 文件，请稍候...\n")
+        log_widget.insert(tk.END, f"【1/4】启动 V5 状态重构引擎，读取文件...\n")
         log_widget.update()
         
-        wb_old = openpyxl.load_workbook(old_excel_path, data_only=True)
+        # V5 引擎不需要对比旧 Excel，直接读取新 Excel 作为绝对真理！
         wb_new = openpyxl.load_workbook(new_excel_path, data_only=True)
-        
-        if target_sheet not in wb_old.sheetnames or target_sheet not in wb_new.sheetnames:
-            messagebox.showerror("错误", f"在某个 Excel 中找不到指定的 Sheet: [{target_sheet}]")
+        if str(target_sheet) not in wb_new.sheetnames:
+            messagebox.showerror("错误", f"最新的 Excel 中找不到指定的 Sheet: [{target_sheet}]")
             return
             
-        ws_old = wb_old[target_sheet]
-        ws_new = wb_new[target_sheet]
+        ws_new = wb_new[str(target_sheet)]
 
         # ==========================================
-        # 1. 免疫表头数字的 Diff 算法，精准追踪物理坐标
+        # 1. 从 CSV 中提取当前 Sheet 的逻辑 ID 前缀 (例如 55)
         # ==========================================
-        log_widget.insert(tk.END, f"【2/4】正在分析 Excel 结构差异 (追踪插入/删除)...\n")
-        log_widget.update()
+        with open(old_csv_path, mode='r', encoding='utf-8-sig', newline='') as f:
+            csv_data = list(csv.reader(f))
+            
+        prefixes = {}
+        for row in csv_data:
+            if len(row) >= 3 and row[1].strip() == str(target_sheet):
+                id_val = row[0].strip()
+                if id_val.isdigit() and len(id_val) >= 4:
+                    # 剥离最后4位(行号2位+列号2位)，剩下的是前缀
+                    p = id_val[:-4] 
+                    prefixes[p] = prefixes.get(p, 0) + 1
+                    
+        if not prefixes:
+            messagebox.showerror("错误", f"在 CSV 中找不到 Sheet [{target_sheet}] 的历史记录，无法推断 ID 前缀。")
+            return
+            
+        # 获取最常见的前缀 (例如 '55')
+        target_prefix = max(prefixes, key=prefixes.get)
+        log_widget.insert(tk.END, f"➔ 成功提取当前 Sheet 的逻辑前缀: [{target_prefix}]\n")
 
-        max_c = max(ws_old.max_column, ws_new.max_column) + 10
-        max_r = max(ws_old.max_row, ws_new.max_row) + 10
-
-        def get_col_sig(ws, col_idx):
-            vals = []
-            for r in range(1, 40):
-                val = ws.cell(row=r, column=col_idx).value
+        # ==========================================
+        # 2. 扫描新 Excel，提取绝对真理：行坐标与列坐标
+        # ==========================================
+        log_widget.insert(tk.END, f"【2/4】正在解析最新 Excel 的物理布局...\n")
+        
+        row_map = {} # 逻辑行号 '01' -> 物理行号 14
+        id_col_idx = None
+        
+        # 找 "行番号" 列
+        for r in range(1, 40):
+            for c in range(1, 20):
+                val = ws_new.cell(row=r, column=c).value
+                if val and "行番号" in str(val).replace(" ", ""):
+                    id_col_idx = c
+                    break
+            if id_col_idx: break
+            
+        if id_col_idx:
+            for r in range(1, ws_new.max_row + 1):
+                val = ws_new.cell(row=r, column=id_col_idx).value
                 if val is not None:
                     v_str = str(val).strip()
-                    # 抹除 (18), （19） 等数字，保证结构匹配不受列名数字变化影响
-                    v_str = re.sub(r'[\(（]\s*\d+\s*[\)）]', '', v_str)
-                    v_str = v_str.replace(" ", "").replace("　", "")
-                    if v_str:
-                        vals.append(v_str)
-            return "|".join(vals)
+                    if v_str.isdigit() and 1 <= int(v_str) <= 99:
+                        row_map[v_str.zfill(2)] = r
 
-        old_col_sigs = [get_col_sig(ws_old, c) for c in range(1, max_c)]
-        new_col_sigs = [get_col_sig(ws_new, c) for c in range(1, max_c)]
-
-        sm_col = difflib.SequenceMatcher(None, old_col_sigs, new_col_sigs)
-        col_map = {}
-        for tag, i1, i2, j1, j2 in sm_col.get_opcodes():
-            if tag in ('equal', 'replace'):
-                for old_i, new_j in zip(range(i1, i2), range(j1, j2)):
-                    col_map[old_i + 1] = new_j + 1
-
-        def get_row_sig(ws, row_idx):
-            vals = []
-            for c in range(1, 30):
-                val = ws.cell(row=row_idx, column=c).value
-                if val is not None:
-                    v_str = str(val).strip()
-                    v_str = re.sub(r'[\(（]\s*\d+\s*[\)）]', '', v_str)
-                    v_str = v_str.replace(" ", "").replace("　", "")
-                    if v_str:
-                        vals.append(v_str)
-            return "|".join(vals)
-
-        old_row_sigs = [get_row_sig(ws_old, r) for r in range(1, max_r)]
-        new_row_sigs = [get_row_sig(ws_new, r) for r in range(1, max_r)]
-        sm_row = difflib.SequenceMatcher(None, old_row_sigs, new_row_sigs)
-        row_map = {}
-        for tag, i1, i2, j1, j2 in sm_row.get_opcodes():
-            if tag in ('equal', 'replace'):
-                for old_i, new_j in zip(range(i1, i2), range(j1, j2)):
-                    row_map[old_i + 1] = new_j + 1
-
-        # ==========================================
-        # 2. 从新 Excel 显式提取最新列名 (28, 29, 30...)
-        # ==========================================
-        log_widget.insert(tk.END, f"【3/4】正在侦测新版 Excel 表头中的逻辑列号...\n")
-        new_col_to_logic_id = {}
-        for c in range(1, max_c):
-            for r in range(1, 30):
+        col_map = {} # 逻辑列号 30 -> 物理列字母 'DM'
+        for r in range(1, 40):
+            for c in range(1, ws_new.max_column + 1):
                 val = ws_new.cell(row=r, column=c).value
                 if val is not None:
                     v_str = str(val).strip()
-                    # 精准抓取单元格里单独的 (28) 或 （28）
                     m = re.search(r'^[\(（]\s*(\d+)\s*[\)）]$', v_str)
                     if m:
-                        new_col_to_logic_id[c] = int(m.group(1))
-                        break # 找到了这列的列号就跳出内层循环
+                        col_map[int(m.group(1))] = get_column_letter(c)
 
-        log_widget.insert(tk.END, f"➔ 成功侦测到 {len(new_col_to_logic_id)} 个带有括号的列号。\n\n")
+        log_widget.insert(tk.END, f"➔ 侦测到 {len(row_map)} 个数据行，{len(col_map)} 个括号列表头。\n\n")
 
         # ==========================================
-        # 3. 读取 CSV，映射物理坐标，并根据新表头强制改名
+        # 3. 交叉相乘，生成完美的新 CSV 映射块
         # ==========================================
-        log_widget.insert(tk.END, f"【4/4】正在更新 CSV 映射...\n")
+        log_widget.insert(tk.END, f"【3/4】正在根据 Excel 画面重构理想坐标字典...\n")
+        
+        new_mappings = {}
+        for r_logic, r_idx in row_map.items():
+            for c_logic, c_str in col_map.items():
+                new_id = f"{target_prefix}{r_logic}{c_logic:02d}"
+                new_cell = f"{c_str}{r_idx}"
+                new_mappings[new_id] = [new_id, str(target_sheet), new_cell]
+
+        # ==========================================
+        # 4. 融合写入 CSV (解决跨页漂移和新增列)
+        # ==========================================
+        log_widget.insert(tk.END, f"【4/4】正在将重构数据覆盖至 CSV (自动处理跨 Sheet)...\n")
         
         output_csv_path = old_csv_path.replace(".csv", "_Updated.csv")
-        
-        with open(old_csv_path, mode='r', encoding='utf-8-sig', newline='') as f:
-            rows = list(csv.reader(f))
-            
         final_rows = []
+        inserted = False
+        
         updated_count = 0
         deleted_count = 0
-        
-        for row in rows:
+        added_count = 0
+
+        for row in csv_data:
             if len(row) < 3:
                 final_rows.append(row)
                 continue
-                
             id_val, sheet_val, old_cell = row[0].strip(), row[1].strip(), row[2].strip()
-            
-            # 只处理指定 Sheet 且 ID 是有效数字（长度至少4位，保证能切分出后两位）
-            if sheet_val == str(target_sheet) and id_val.isdigit() and len(id_val) >= 4:
-                match = re.match(r"([a-zA-Z]+)(\d+)", old_cell)
-                if match:
-                    col_str, row_str = match.groups()
-                    old_col_idx = column_index_from_string(col_str)
-                    old_row_idx = int(row_str)
-                    
-                    new_col_idx = col_map.get(old_col_idx)
-                    new_row_idx = row_map.get(old_row_idx)
-                    
-                    if new_col_idx and new_row_idx:
-                        new_cell = f"{get_column_letter(new_col_idx)}{new_row_idx}"
-                        
-                        # 【核心突破】：抬头看一眼这列在最新的 Excel 里，表头数字是多少？
-                        detected_logic_num = new_col_to_logic_id.get(new_col_idx)
-                        
-                        if detected_logic_num is not None:
-                            # 保留前面的前缀 (比如 923)，直接替换最后两位列名
-                            new_id_val = f"{id_val[:-2]}{detected_logic_num:02d}"
-                        else:
-                            # 万一这列没写括号数字，安全起见保持原 ID
-                            new_id_val = id_val
-                            
-                        final_rows.append([new_id_val, sheet_val, new_cell])
-                        
-                        if new_id_val != id_val or new_cell != old_cell:
-                            updated_count += 1
-                            log_widget.insert(tk.END, f" 🔄 [修正] ID: {id_val} ➔ {new_id_val} | 坐标: {old_cell} ➔ {new_cell}\n")
-                    else:
-                        # 物理列/行被彻彻底底删除了
-                        deleted_count += 1
-                        log_widget.insert(tk.END, f" ❌ [删除] ID: {id_val} | 原坐标 {old_cell} 的物理列已被移除。\n")
-                else:
-                    final_rows.append(row)
-            else:
-                final_rows.append(row)
+
+            # 情况A：这个 ID 在我们刚刚生成的完美字典里！
+            if id_val in new_mappings:
+                if not inserted:
+                    # 在遇到第一个属于新字典的 ID 时，把整个完美字典一波性按顺序插入！
+                    sorted_new = sorted(new_mappings.values(), key=lambda x: x[0])
+                    final_rows.extend(sorted_new)
+                    inserted = True
                 
-        # ==========================================
-        # 4. 导出结果并替换
-        # ==========================================
+                # 统计差异 (纯为了打印日志)
+                new_row = new_mappings[id_val]
+                if sheet_val != str(target_sheet):
+                    log_widget.insert(tk.END, f" 🚀 [跨页迁移] {id_val} 从 Sheet {sheet_val} 搬家到了当前 {target_sheet}！\n")
+                    updated_count += 1
+                elif old_cell != new_row[2]:
+                    updated_count += 1
+                
+                # 扔掉旧的那行，因为完美的已经插入了
+                continue
+
+            # 情况B：这个 ID 属于当前 Sheet，但在新字典里没有（物理删除了）
+            if sheet_val == str(target_sheet) and id_val.startswith(target_prefix):
+                log_widget.insert(tk.END, f" ❌ [彻底删除] 画面上找不到 {id_val} ({old_cell})，已清理。\n")
+                deleted_count += 1
+                continue
+
+            # 情况C：其他毫无关系的数据（保持原样）
+            final_rows.append(row)
+
+        # 极端保护机制：如果原表是空的，强制加在最后
+        if not inserted and new_mappings:
+            sorted_new = sorted(new_mappings.values(), key=lambda x: x[0])
+            final_rows.extend(sorted_new)
+            added_count = len(new_mappings)
+            log_widget.insert(tk.END, f" ➕ [全新生成] CSV 原本无此页记录，已全新生成 {added_count} 条数据。\n")
+
+        # 保存覆盖
         with open(output_csv_path, mode='w', encoding='utf-8-sig', newline='') as f:
             writer = csv.writer(f)
             writer.writerows(final_rows)
@@ -164,17 +155,21 @@ def process_dynamic_mapping(old_csv_path, old_excel_path, new_excel_path, target
         shutil.copyfile(output_csv_path, old_csv_path)
         os.remove(output_csv_path)
             
-        log_widget.insert(tk.END, f"\n✅ 【处理成功】\n由于新增/删除列，成功修正并重命了 {updated_count} 个坐标及 ID。\n移除了 {deleted_count} 个失效项。\n")
+        log_widget.insert(tk.END, f"\n✅ 【处理成功】\n共生成绝对真理映射 {len(new_mappings)} 条。\n")
         log_widget.see(tk.END)
-        messagebox.showinfo("成功", f"Sheet [{target_sheet}] 动态修正完成！\n修正数量: {updated_count} 个\n移除失效: {deleted_count} 个")
+        messagebox.showinfo("成功", f"Sheet [{target_sheet}] 彻底重构完成！\n请检查 CSV！")
         
     except Exception as e:
         messagebox.showerror("系统错误", f"处理过程中发生异常:\n{str(e)}")
 
+
+# ==========================================
+# GUI 保持不变，让你顺手
+# ==========================================
 class DynamicUpdaterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("坐标映射智能修正工具 (AI 表头侦测版) v4.0")
+        self.root.title("坐标映射重构工具 (绝对真理重绘版) v5.0")
         self.root.geometry("750x650")
         
         def create_file_picker(parent, label_text, file_types):
@@ -188,14 +183,14 @@ class DynamicUpdaterApp:
             return entry
 
         self.csv_entry = create_file_picker(root, "1. 请选择【原本】的映射 CSV 文件 (例: DafKazeiWrt.csv):", [("CSV Files", "*.csv")])
-        self.old_xl_entry = create_file_picker(root, "2. 请选择【原本】未修改的 Excel 文件 (.xlsm/.xlsx):", [("Excel Files", "*.xlsm *.xlsx")])
+        self.old_xl_entry = create_file_picker(root, "2. [已无需此项, 保持原样即可] 请选择未修改的 Excel:", [("Excel Files", "*.xlsm *.xlsx")])
         self.new_xl_entry = create_file_picker(root, "3. 请选择【改修后】最新的 Excel 文件 (.xlsm/.xlsx):", [("Excel Files", "*.xlsm *.xlsx")])
         
         tk.Label(root, text="4. 请输入本次要更新的 Sheet 名称 (例如: 47):", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(8, 2))
         self.sheet_entry = tk.Entry(root, width=25, font=("Calibri", 11, "bold"), fg="blue")
         self.sheet_entry.pack(anchor="w", padx=15, pady=2)
         
-        self.btn_start = tk.Button(root, text="🚀 侦测表头并修正 CSV 映射", bg="#0078D7", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
+        self.btn_start = tk.Button(root, text="🚀 基于新 Excel 画面彻底重构本页映射", bg="#0078D7", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
         self.btn_start.pack(fill="x", padx=15, pady=15, ipady=5)
         
         tk.Label(root, text="执行日志:", font=("MS Gothic", 9)).pack(anchor="w", padx=15)
@@ -219,7 +214,7 @@ class DynamicUpdaterApp:
             return
             
         self.log_text.delete(1.0, tk.END)
-        process_dynamic_mapping(csv_p, old_xl, new_xl, sheet_n, self.log_text)
+        process_reconstruction_mapping(csv_p, old_xl, new_xl, sheet_n, self.log_text)
 
 if __name__ == "__main__":
     app_root = tk.Tk()
