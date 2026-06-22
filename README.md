@@ -5,64 +5,71 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 import openpyxl
 
-def generate_pattern_spec(excel_path, sheet_name, scan_mode, start_idx, item_template, item_type, max_chars, align, font_size, edit_method, log_widget):
+def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, start_idx, item_template, csv_id_template, item_type, max_chars, align, font_size, log_widget):
     try:
-        log_widget.insert(tk.END, f"正在加载 Excel 文件 [{os.path.basename(excel_path)}]...\n")
+        # ==========================================
+        # 1. 加载 CSV 映射表，建立坐标字典
+        # ==========================================
+        log_widget.insert(tk.END, f"【1/3】正在读取 CSV 映射库，建立坐标字典...\n")
+        log_widget.update()
+        
+        csv_dict = {}
+        with open(csv_path, mode='r', encoding='utf-8-sig', newline='') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) >= 3:
+                    c_id, c_sheet, c_cell = row[0].strip(), row[1].strip(), row[2].strip()
+                    csv_dict[c_id] = {"sheet": c_sheet, "cell": c_cell}
+                    
+        log_widget.insert(tk.END, f"➔ 成功加载 {len(csv_dict)} 条坐标映射数据。\n\n")
+
+        # ==========================================
+        # 2. 扫描 Excel 提取变动 ID
+        # ==========================================
+        log_widget.insert(tk.END, f"【2/3】正在启动全景雷达扫描 Excel [{os.path.basename(excel_path)}]...\n")
         log_widget.update()
         
         wb = openpyxl.load_workbook(excel_path, data_only=True)
         if sheet_name not in wb.sheetnames:
             messagebox.showerror("错误", f"在 Excel 中找不到指定的 Sheet: [{sheet_name}]")
             return
-            
         ws = wb[sheet_name]
-        extracted_ids = []
+        
+        extracted_items = [] # 存储字典: {"raw": "013", "short": "01"}
 
-        # ==========================================
-        # 模式 A：扫描【行番号】(013, 023, 033...)
-        # ==========================================
         if scan_mode == "ROW":
-            log_widget.insert(tk.END, f"正在启动全景雷达，扫描行番号...\n")
-            id_col_start = None
-            id_row_start = None
-            
+            id_col_start, id_row_start = None, None
             for r in range(1, 100):
                 for c in range(1, 100):
                     val = ws.cell(row=r, column=c).value
                     if val:
                         clean_val = re.sub(r'\s+', '', str(val))
                         if "行番号" in clean_val:
-                            id_col_start = c
-                            id_row_start = r
+                            id_col_start, id_row_start = c, r
                             break
                         elif clean_val == "行": 
                             v_below = ws.cell(row=r+1, column=c).value
                             if v_below and "番" in re.sub(r'\s+', '', str(v_below)):
-                                id_col_start = c
-                                id_row_start = r + 2
+                                id_col_start, id_row_start = c, r + 2
                                 break
                 if id_col_start: break
                 
             if id_col_start:
                 for r in range(id_row_start + 1, ws.max_row + 1):
                     logic_str = ""
-                    for offset in range(8): # 横向拼接最多8个格子
+                    for offset in range(8): 
                         v = ws.cell(row=r, column=id_col_start + offset).value
                         if v is not None:
                             s = str(v).translate(str.maketrans('０１２３４５６７８９', '0123456789')).strip()
-                            if s.isdigit():
-                                logic_str += s
+                            if s.isdigit(): logic_str += s
                     if len(logic_str) >= 2:
-                        if logic_str not in extracted_ids:
-                            extracted_ids.append(logic_str)
-                            
-            log_widget.insert(tk.END, f"➔ 成功提取到 {len(extracted_ids)} 个行番号 ID。\n\n")
+                        if logic_str not in [x["raw"] for x in extracted_items]:
+                            extracted_items.append({
+                                "raw": logic_str, 
+                                "short": logic_str[:2] # 提取前两位作为 ID2
+                            })
 
-        # ==========================================
-        # 模式 B：扫描【列表头】(28, 29, 30...)
-        # ==========================================
         elif scan_mode == "COL":
-            log_widget.insert(tk.END, f"正在扫描前 50 行，提取括号列表头...\n")
             for c in range(1, ws.max_column + 10):
                 for r in range(1, 50):
                     val = ws.cell(row=r, column=c).value
@@ -71,60 +78,71 @@ def generate_pattern_spec(excel_path, sheet_name, scan_mode, start_idx, item_tem
                         m = re.search(r'[\(（](\d+)[\)）]', v_str)
                         if m:
                             num = m.group(1)
-                            if num not in extracted_ids:
-                                extracted_ids.append(num)
+                            if num not in [x["raw"] for x in extracted_items]:
+                                extracted_items.append({
+                                    "raw": num, 
+                                    "short": num[:2] if len(num) >= 2 else num
+                                })
                             break
-            # 对列号进行纯数字排序
-            extracted_ids = sorted(extracted_ids, key=lambda x: int(x))
-            log_widget.insert(tk.END, f"➔ 成功提取到 {len(extracted_ids)} 个列表头 ID。\n\n")
+            # 排序
+            extracted_items = sorted(extracted_items, key=lambda x: int(x["raw"]))
 
-        if not extracted_ids:
-            messagebox.showerror("错误", "未能提取到任何有效的 ID，请检查扫描模式或 Excel 内容。")
+        if not extracted_items:
+            messagebox.showerror("错误", "未能提取到任何有效 ID，请检查扫描模式或 Excel 内容。")
             return
+            
+        log_widget.insert(tk.END, f"➔ 成功提取到 {len(extracted_items)} 个目标锚点。\n\n")
 
         # ==========================================
-        # 生成 CSV 数据
+        # 3. 动态查表，生成带真实坐标的 CSV
         # ==========================================
-        log_widget.insert(tk.END, f"正在拼装 패턴表 (Pattern Table) 数据...\n")
+        log_widget.insert(tk.END, f"【3/3】正在现取坐标，拼装 Pattern 表...\n")
         output_rows = []
-        
-        # 写入完美的 10 列标准表头
         output_rows.append(["No", "項目名", "選択項目No", "タイプ種別", "最大文字数", "文字配置", "領域外の対処", "文字フォント/サイズ", "編集箇所", "編集方法"])
         
         current_idx = int(start_idx)
+        found_count = 0
+        missing_count = 0
         
-        for logic_id in extracted_ids:
-            # 使用 {ID} 动态替换项目名，例如: "市町村民税{ID}_特定親族特別控除" -> "市町村民税013_特定親族特別控除"
-            item_name = item_template.replace("{ID}", logic_id)
+        for item in extracted_items:
+            raw_id = item["raw"]
+            short_id = item["short"]
+            
+            # 动态替换项目名与要查询的 CSV ID
+            item_name = item_template.replace("{ID}", raw_id).replace("{ID2}", short_id)
+            search_id = csv_id_template.replace("{ID}", raw_id).replace("{ID2}", short_id)
+            
+            # 现取坐标！去字典里捞数据
+            if search_id in csv_dict:
+                c_sheet = csv_dict[search_id]["sheet"]
+                c_cell = csv_dict[search_id]["cell"]
+                # 拼装多行格式，\n 在写入 CSV 时会直接变成 Excel 里的强制换行
+                edit_method = f"表行列: S{search_id}\nシート番号: {c_sheet}\n座標: {c_cell}"
+                found_count += 1
+                log_widget.insert(tk.END, f" 🎯 查表命中: {search_id} ➔ {c_cell}\n")
+            else:
+                edit_method = f"表行列: S{search_id}\nシート番号: 未知\n座標: 未知"
+                missing_count += 1
+                log_widget.insert(tk.END, f" ⚠️ 未找到坐标: {search_id} (字典中不存在)\n")
             
             row_data = [
-                str(current_idx),          # No
-                item_name,                 # 項目名
-                "",                        # 選択項目No
-                item_type,                 # タイプ種別
-                max_chars,                 # 最大文字数
-                align,                     # 文字配置
-                "出力しない",               # 領域外の対処 (固定默认)
-                font_size,                 # 文字フォント/サイズ
-                "-",                       # 編集箇所 (固定默认)
-                edit_method                # 編集方法
+                str(current_idx), item_name, "", item_type, max_chars, align, 
+                "出力しない", font_size, "-", edit_method
             ]
             output_rows.append(row_data)
-            
-            log_widget.insert(tk.END, f" ✅ 组装: {current_idx} | {item_name}\n")
             current_idx += 1
 
         # ==========================================
-        # 导出 CSV
+        # 4. 导出 CSV
         # ==========================================
         output_csv_path = os.path.join(os.path.dirname(excel_path), f"Pattern_Spec_Sheet{sheet_name}_{scan_mode}.csv")
         with open(output_csv_path, mode='w', encoding='utf-8-sig', newline='') as f:
             writer = csv.writer(f)
             writer.writerows(output_rows)
             
-        log_widget.insert(tk.END, f"\n🎉 【处理成功】\n共生成 {len(extracted_ids)} 行式样数据。\n文件已保存: {os.path.basename(output_csv_path)}\n")
+        log_widget.insert(tk.END, f"\n🎉 【生成完毕】\n成功匹配坐标: {found_count} 个\n未能匹配坐标: {missing_count} 个\n文件已保存: {os.path.basename(output_csv_path)}\n")
         log_widget.see(tk.END)
-        messagebox.showinfo("成功", f"Pattern 式样书生成完毕！\n\n共生成 {len(extracted_ids)} 行数据。\n请用 Excel 打开生成的 CSV，直接全选粘贴到你的模板中即可。")
+        messagebox.showinfo("成功", f"式样书生成完毕！\n\n完美查到 {found_count} 个动态坐标。\n直接复制进 Excel 即可！")
         
     except Exception as e:
         messagebox.showerror("系统错误", f"发生异常:\n{str(e)}")
@@ -132,11 +150,11 @@ def generate_pattern_spec(excel_path, sheet_name, scan_mode, start_idx, item_tem
 # ==========================================
 # GUI 界面
 # ==========================================
-class PatternSpecGeneratorApp:
+class DynamicPatternApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("测试式样书自动生成器 (パターン表 专属)")
-        self.root.geometry("680x720")
+        self.root.title("测试式样书自动生成器 (现取坐标终极版)")
+        self.root.geometry("700x780")
         
         def create_input_row(parent, label_text, default_val=""):
             frame = tk.Frame(parent)
@@ -148,65 +166,75 @@ class PatternSpecGeneratorApp:
             return entry
 
         # 1. 文件选择
-        tk.Label(root, text="1. 请选择最新版的 Excel 文件:", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+        tk.Label(root, text="1. 文件选择:", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+        
+        csv_frame = tk.Frame(root)
+        csv_frame.pack(fill="x", padx=15, pady=2)
+        tk.Label(csv_frame, text="映射 CSV (查坐标用):", width=22, anchor="w").pack(side="left")
+        self.csv_entry = tk.Entry(csv_frame, font=("Calibri", 10))
+        self.csv_entry.pack(side="left", fill="x", expand=True, ipady=3)
+        tk.Button(csv_frame, text="浏览...", width=10, command=lambda: self.browse_file(self.csv_entry, [("CSV", "*.csv")])).pack(side="right", padx=5)
+        
         excel_frame = tk.Frame(root)
         excel_frame.pack(fill="x", padx=15, pady=2)
+        tk.Label(excel_frame, text="最新 Excel (扫行号用):", width=22, anchor="w").pack(side="left")
         self.excel_entry = tk.Entry(excel_frame, font=("Calibri", 10))
         self.excel_entry.pack(side="left", fill="x", expand=True, ipady=3)
-        tk.Button(excel_frame, text="浏览...", width=10, command=self.browse_file).pack(side="right", padx=5)
+        tk.Button(excel_frame, text="浏览...", width=10, command=lambda: self.browse_file(self.excel_entry, [("Excel", "*.xlsm *.xlsx")])).pack(side="right", padx=5)
 
         # 2. 扫描模式
-        tk.Label(root, text="2. 扫描来源模式 (决定 {ID} 提取什么):", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+        tk.Label(root, text="2. 扫描来源模式:", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
         mode_frame = tk.Frame(root)
         mode_frame.pack(fill="x", padx=15)
         self.mode_var = tk.StringVar(value="ROW")
-        tk.Radiobutton(mode_frame, text="按【行番号】生成 (提取 013, 023...)", variable=self.mode_var, value="ROW", font=("MS Gothic", 9)).pack(side="left", padx=10)
-        tk.Radiobutton(mode_frame, text="按【列表头】生成 (提取 28, 29...)", variable=self.mode_var, value="COL", font=("MS Gothic", 9)).pack(side="left", padx=10)
+        tk.Radiobutton(mode_frame, text="按【行番号】(013, 023)", variable=self.mode_var, value="ROW", font=("MS Gothic", 9)).pack(side="left", padx=10)
+        tk.Radiobutton(mode_frame, text="按【列表头】(28, 29)", variable=self.mode_var, value="COL", font=("MS Gothic", 9)).pack(side="left", padx=10)
 
-        # 3. 参数配置
-        tk.Label(root, text="3. 表格参数配置 (使用 {ID} 作为动态变量):", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
-        self.sheet_entry = create_input_row(root, "目标 Sheet (如 69):", "69")
+        # 3. 模板配置
+        tk.Label(root, text="3. 模板配置 ({ID}为全串如013，{ID2}为前两位如01):", font=("MS Gothic", 9, "bold"), fg="blue").pack(anchor="w", padx=15, pady=(10, 2))
+        self.sheet_entry = create_input_row(root, "扫描目标 Sheet (如 69):", "69")
         self.start_idx_entry = create_input_row(root, "No (起始序号如 17):", "17")
-        self.template_entry = create_input_row(root, "項目名 模板 (含 {ID}):", "市町村民税{ID}_特定親族特別控除")
+        self.template_entry = create_input_row(root, "項目名 模板:", "市町村民税{ID}_特定親族特別控除")
+        self.csv_id_template_entry = create_input_row(root, "CSV ID 匹配模板:", "55{ID2}43") # 核心：告诉程序怎么拼成完整 ID 去查表
         self.type_entry = create_input_row(root, "タイプ種別:", "テキスト")
         self.max_char_entry = create_input_row(root, "最大文字数:", "13")
         self.align_entry = create_input_row(root, "文字配置:", "右配置")
         self.font_entry = create_input_row(root, "文字フォント/サイズ:", "MS Pゴシック/ 9")
-        self.edit_method_entry = create_input_row(root, "編集方法 (可留空):", "#REF!")
 
         # 4. 按钮与日志
-        self.btn_start = tk.Button(root, text="🚀 一键生成 パターン表 (CSV)", bg="#28A745", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
+        self.btn_start = tk.Button(root, text="🚀 现取坐标，一键生成完美 パターン表", bg="#28A745", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
         self.btn_start.pack(fill="x", padx=15, pady=15, ipady=5)
         
         self.log_text = scrolledtext.ScrolledText(root, height=10, font=("Consolas", 10), bg="#1E1E1E", fg="#D4D4D4")
         self.log_text.pack(fill="both", expand=True, padx=15, pady=(0, 10))
         
-    def browse_file(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsm *.xlsx")])
+    def browse_file(self, entry_widget, f_types):
+        path = filedialog.askopenfilename(filetypes=f_types)
         if path:
-            self.excel_entry.delete(0, tk.END)
-            self.excel_entry.insert(0, path)
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, path)
             
     def start_process(self):
+        csv_p = self.csv_entry.get().strip()
         excel_p = self.excel_entry.get().strip()
         sheet_n = self.sheet_entry.get().strip()
         mode = self.mode_var.get()
         start_idx = self.start_idx_entry.get().strip()
         template = self.template_entry.get().strip()
+        csv_id_template = self.csv_id_template_entry.get().strip()
         i_type = self.type_entry.get().strip()
         max_c = self.max_char_entry.get().strip()
         align = self.align_entry.get().strip()
         font_s = self.font_entry.get().strip()
-        edit_m = self.edit_method_entry.get().strip()
         
-        if not excel_p or "{ID}" not in template:
-            messagebox.showwarning("提示", "请选择 Excel 文件，并且【項目名 模板】中必须包含 {ID} 占位符！")
+        if not csv_p or not excel_p or "{ID" not in template or "{ID" not in csv_id_template:
+            messagebox.showwarning("提示", "请选择两个文件！且【項目名模板】和【CSV ID模板】中必须含有 {ID} 或 {ID2} 占位符！")
             return
             
         self.log_text.delete(1.0, tk.END)
-        generate_pattern_spec(excel_p, sheet_n, mode, start_idx, template, i_type, max_c, align, font_s, edit_m, self.log_text)
+        generate_dynamic_pattern_spec(csv_p, excel_p, sheet_n, mode, start_idx, template, csv_id_template, i_type, max_c, align, font_s, self.log_text)
 
 if __name__ == "__main__":
     app_root = tk.Tk()
-    app = PatternSpecGeneratorApp(app_root)
+    app = DynamicPatternApp(app_root)
     app_root.mainloop()
