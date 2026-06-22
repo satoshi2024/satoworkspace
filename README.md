@@ -2,108 +2,187 @@ import os
 import re
 import csv
 import shutil
+import difflib
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 import openpyxl
-from openpyxl.utils.cell import get_column_letter
 
-def process_pure_append(csv_path, excel_path, target_sheet, added_col, log_widget):
+def process_row_logic_shift(csv_path, old_excel_path, new_excel_path, target_sheet, log_widget):
     try:
-        log_widget.insert(tk.END, f"【1/3】正在读取 Excel 寻找新列 ({added_col}) 的物理坐标...\n")
+        log_widget.insert(tk.END, f"【1/4】正在加载新旧 Excel 文件...\n")
         log_widget.update()
         
-        wb = openpyxl.load_workbook(excel_path, data_only=True)
-        if target_sheet not in wb.sheetnames:
-            messagebox.showerror("错误", f"Excel 中找不到 Sheet: [{target_sheet}]")
+        wb_old = openpyxl.load_workbook(old_excel_path, data_only=True)
+        wb_new = openpyxl.load_workbook(new_excel_path, data_only=True)
+        
+        if target_sheet not in wb_old.sheetnames or target_sheet not in wb_new.sheetnames:
+            messagebox.showerror("错误", f"在 Excel 中找不到指定的 Sheet: [{target_sheet}]")
             return
             
-        ws = wb[target_sheet]
-        
-        # 1. 在 Excel 中寻找追加列的物理列号 (支持全角/半角括号和数字)
-        target_phys_col_letter = None
-        for c in range(1, ws.max_column + 15):
-            for r in range(1, 50):
-                val = ws.cell(row=r, column=c).value
-                if val is not None:
-                    # 将全角转半角，消除空格
-                    v_str = str(val).translate(str.maketrans('０１２３４５６７８９', '0123456789')).replace(" ", "").replace("　", "").strip()
-                    m = re.search(r'^[\(（]\s*(\d+)\s*[\)）]$', v_str)
-                    if m and int(m.group(1)) == int(added_col):
-                        target_phys_col_letter = get_column_letter(c)
+        ws_old = wb_old[target_sheet]
+        ws_new = wb_new[target_sheet]
+
+        # ==========================================
+        # 1. 核心提取器：拼装被拆分的“行番号”并提取行指纹
+        # ==========================================
+        def get_row_data(ws, version_name):
+            id_col_start = None
+            id_row_start = None
+            
+            # 寻找 "行番号" 所在的列
+            for r in range(1, 40):
+                for c in range(1, 20):
+                    val = ws.cell(row=r, column=c).value
+                    if val and "行番号" in str(val).replace(" ", ""):
+                        id_col_start = c
+                        id_row_start = r
                         break
-            if target_phys_col_letter:
-                break
+                if id_col_start: break
                 
-        if not target_phys_col_letter:
-            messagebox.showerror("错误", f"在 Sheet [{target_sheet}] 的前 50 行内找不到 ({added_col}) 的表头！")
-            return
+            phys_to_logic = {}
+            signatures = []
+            phys_rows = []
             
-        log_widget.insert(tk.END, f"➔ 成功锁定 ({added_col}) 列的物理坐标为: {target_phys_col_letter} 列\n\n")
+            skip_cols = []
+            if id_col_start:
+                skip_cols = [id_col_start, id_col_start+1, id_col_start+2]
+            
+            if id_col_start:
+                # 往下扫，把相邻三列的数字拼起来
+                for r in range(id_row_start + 1, ws.max_row + 1):
+                    v1 = ws.cell(row=r, column=id_col_start).value
+                    v2 = ws.cell(row=r, column=id_col_start + 1).value
+                    v3 = ws.cell(row=r, column=id_col_start + 2).value
+                    
+                    s1 = str(v1).translate(str.maketrans('０１２３４５６７８９', '0123456789')).strip() if v1 is not None else ""
+                    s2 = str(v2).translate(str.maketrans('０１２３４５６７８９', '0123456789')).strip() if v2 is not None else ""
+                    s3 = str(v3).translate(str.maketrans('０１２３４５６７８９', '0123456789')).strip() if v3 is not None else ""
+                    
+                    logic_row = ""
+                    if s1.isdigit(): logic_row += s1
+                    if s2.isdigit(): logic_row += s2
+                    if s3.isdigit(): logic_row += s3
+                    
+                    # 只有当这一行确实有“行番号”时，我们才提取它的指纹！
+                    if logic_row: 
+                        phys_to_logic[r] = logic_row
+                        
+                        vals = []
+                        # 提取前面 20 列的文本作为这一行的“骨架”
+                        for c in range(1, 20):
+                            if c in skip_cols: continue
+                            val = ws.cell(row=r, column=c).value
+                            v_str = str(val).replace(" ", "").replace("　", "").replace("\n", "").strip() if val is not None else ""
+                            # 核心：抹除所有数字，只留下汉字对比（例如“一般四輪乗用営業用”）
+                            v_str = re.sub(r'\d+', '', v_str) 
+                            vals.append(v_str)
+                            
+                        sig = "|".join(vals)
+                        signatures.append(sig)
+                        phys_rows.append(r)
+                        
+            log_widget.insert(tk.END, f"➔ [{version_name}] 成功解析 {len(phys_to_logic)} 个有效数据行。\n")
+            return phys_to_logic, signatures, phys_rows
+
+        log_widget.insert(tk.END, f"【2/4】正在解析行番号字典与文本骨架...\n")
+        log_widget.update()
         
-        # 2. 读取 CSV，完全不修改原有数据，仅提取物理行锚点
-        log_widget.insert(tk.END, f"【2/3】正在解析 CSV 基础数据...\n")
+        old_phys_to_logic, old_sigs, old_phys_rows = get_row_data(ws_old, "旧版 Excel")
+        new_phys_to_logic, new_sigs, new_phys_rows = get_row_data(ws_new, "新版 Excel")
+
+        # ==========================================
+        # 2. Diff 行文骨架，找出物理行的漂移映射
+        # ==========================================
+        log_widget.insert(tk.END, f"【3/4】正在比对文本，定位物理行的漂移轨迹...\n")
+        sm = difflib.SequenceMatcher(None, old_sigs, new_sigs)
+        old_r_to_new_r = {}
+        
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag in ('equal', 'replace'):
+                for old_idx, new_idx in zip(range(i1, i2), range(j1, j2)):
+                    old_r = old_phys_rows[old_idx]
+                    new_r = new_phys_rows[new_idx]
+                    old_r_to_new_r[old_r] = new_r
+
+        # ==========================================
+        # 3. 读取 CSV，执行坐标更新与 ID 翻译
+        # ==========================================
+        log_widget.insert(tk.END, f"【4/4】正在更新 CSV 坐标并翻译逻辑 ID...\n")
+        
         with open(csv_path, mode='r', encoding='utf-8-sig', newline='') as f:
-            csv_rows = list(csv.reader(f))
+            csv_data = list(csv.reader(f))
             
-        base_to_phys_row = {}
-        existing_ids = set()
-        
-        for row in csv_rows:
-            if len(row) >= 3 and row[1].strip() == str(target_sheet):
-                id_val, cell_val = row[0].strip(), row[2].strip()
-                existing_ids.add(id_val)
+        new_rows = []
+        updated_coord_count = 0
+        updated_id_count = 0
+        deleted_count = 0
+
+        for row in csv_data:
+            if len(row) < 3:
+                new_rows.append(row)
+                continue
                 
-                # 提取如 '550142' 中的 '5501' 作为基准前缀
-                if id_val.isdigit() and len(id_val) >= 4:
-                    base_prefix = id_val[:-2] 
-                    # 提取坐标中的物理行，例如 'DR15' -> '15'
-                    match = re.search(r'\d+', cell_val)
-                    if match:
-                        base_to_phys_row[base_prefix] = match.group(0)
+            id_val, sheet_val, old_cell = row[0].strip(), row[1].strip(), row[2].strip()
+            
+            # 只处理指定的 Sheet
+            if sheet_val == str(target_sheet):
+                match = re.match(r"([a-zA-Z]+)(\d+)", old_cell)
+                if match:
+                    col_str = match.group(1) # 列没变，直接继承 (例如 'AK')
+                    old_phys_row = int(match.group(2)) # 例如 38
+                    
+                    # 查 Diff 字典：旧的 38 行变成了新版的第几行？
+                    new_phys_row = old_r_to_new_r.get(old_phys_row)
+                    
+                    if new_phys_row:
+                        new_cell = f"{col_str}{new_phys_row}"
                         
-        if not base_to_phys_row:
-            messagebox.showerror("错误", f"CSV 中没有任何关于 Sheet [{target_sheet}] 的老数据，无法推算新数据的行号！")
-            return
-            
-        # 3. 构造追加数据，并原位插队
-        log_widget.insert(tk.END, f"【3/3】开始执行纯粹追加 (不修改任何既有数据)...\n")
-        
-        added_col_padded = str(added_col).zfill(2)
-        appended_count = 0
-        
-        # 为了保证不打乱原 CSV 顺序，我们需要找到对应的位置并 insert
-        for base_prefix, phys_row in base_to_phys_row.items():
-            new_id = f"{base_prefix}{added_col_padded}"
-            
-            # 如果库里确实没有，才进行追加
-            if new_id not in existing_ids:
-                new_cell = f"{target_phys_col_letter}{phys_row}"
-                new_row_data = [new_id, str(target_sheet), new_cell]
-                
-                # 寻找插入点：倒序遍历，找到 CSV 中最后一个属于 base_prefix (如 5501) 的行，插在它下面
-                insert_idx = len(csv_rows)
-                for i in range(len(csv_rows)-1, -1, -1):
-                    if len(csv_rows[i]) >= 1 and str(csv_rows[i][0]).strip().startswith(base_prefix):
-                        insert_idx = i + 1
-                        break
+                        # 查行号字典：获取新老版本的逻辑行号 (例如 210 -> 200)
+                        old_logic = old_phys_to_logic.get(old_phys_row)
+                        new_logic = new_phys_to_logic.get(new_phys_row)
                         
-                csv_rows.insert(insert_idx, new_row_data)
-                appended_count += 1
-                log_widget.insert(tk.END, f" ➕ [追加成功] {new_id} , {target_sheet} , {new_cell} (无缝插入完毕)\n")
-                
-        # 4. 导出
+                        new_id_val = id_val
+                        # 如果行号变了，并且旧行号存在于 ID 中，执行替换！
+                        if old_logic and new_logic and old_logic != new_logic:
+                            # 逆向替换：替换 ID 中最后一次出现的行号 (防止前缀重复)
+                            head, sep, tail = id_val.rpartition(old_logic)
+                            if sep:
+                                new_id_val = head + new_logic + tail
+                                
+                        new_rows.append([new_id_val, sheet_val, new_cell])
+                        
+                        if new_cell != old_cell or new_id_val != id_val:
+                            log_msg = f" 🔄 [追踪] "
+                            if new_id_val != id_val:
+                                log_msg += f"ID: {id_val} ➔ {new_id_val} | "
+                                updated_id_count += 1
+                            if new_cell != old_cell:
+                                log_msg += f"坐标: {old_cell} ➔ {new_cell}"
+                                updated_coord_count += 1
+                            log_widget.insert(tk.END, log_msg + "\n")
+                    else:
+                        deleted_count += 1
+                        log_widget.insert(tk.END, f" ❌ [行删除] ID:{id_val} | 物理行 {old_phys_row} 在新版中被移除。\n")
+                else:
+                    new_rows.append(row)
+            else:
+                new_rows.append(row)
+
+        # ==========================================
+        # 4. 导出结果
+        # ==========================================
         output_csv_path = csv_path.replace(".csv", "_Updated.csv")
         with open(output_csv_path, mode='w', encoding='utf-8-sig', newline='') as f:
             writer = csv.writer(f)
-            writer.writerows(csv_rows)
+            writer.writerows(new_rows)
             
         shutil.copyfile(csv_path, csv_path + ".bak")
         shutil.copyfile(output_csv_path, csv_path)
         os.remove(output_csv_path)
-        
-        log_widget.insert(tk.END, f"\n✅ 【处理完成】\n完全没有修改原 CSV 的任何一行数据。\n成功追加了 {appended_count} 个新坐标！\n")
+            
+        log_widget.insert(tk.END, f"\n✅ 【处理成功】\n坐标发生漂移: {updated_coord_count} 个\n逻辑 ID 翻译更名: {updated_id_count} 个\n废弃删除: {deleted_count} 个\n")
         log_widget.see(tk.END)
-        messagebox.showinfo("成功", f"追加完成！\n\n共新增 {appended_count} 行。\n原表未做任何修改与排序。")
+        messagebox.showinfo("成功", f"Sheet [{target_sheet}] 行号与 ID 修正完成！\n\n坐标更新: {updated_coord_count}\nID 更名: {updated_id_count}\n\n(列未受影响，保留绝对原序)")
         
     except Exception as e:
         messagebox.showerror("系统错误", f"发生异常:\n{str(e)}")
@@ -111,11 +190,11 @@ def process_pure_append(csv_path, excel_path, target_sheet, added_col, log_widge
 # ==========================================
 # 极简 GUI 界面
 # ==========================================
-class PureAppenderApp:
+class RowLogicTranslatorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("坐标映射追加专属工具 (纯粹追加版)")
-        self.root.geometry("650x500")
+        self.root.title("坐标映射引擎 (V17 行位漂移+ID翻译专属版)")
+        self.root.geometry("680x520")
         
         def create_file_picker(parent, label_text, file_types):
             tk.Label(parent, text=label_text, font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(8, 2))
@@ -127,22 +206,18 @@ class PureAppenderApp:
             btn.pack(side="right", padx=5)
             return entry
 
-        # 仅需 2 个文件
-        self.csv_entry = create_file_picker(root, "1. 请选择要追加的映射 CSV 文件:", [("CSV Files", "*.csv")])
-        self.new_xl_entry = create_file_picker(root, "2. 请选择包含新列的 Excel 文件:", [("Excel Files", "*.xlsm *.xlsx")])
+        self.csv_entry = create_file_picker(root, "1. 请选择映射 CSV 文件:", [("CSV Files", "*.csv")])
+        self.old_xl_entry = create_file_picker(root, "2. 请选择【原本】未修改的 Excel 文件:", [("Excel Files", "*.xlsm *.xlsx")])
+        self.new_xl_entry = create_file_picker(root, "3. 请选择【改修后】最新的 Excel 文件:", [("Excel Files", "*.xlsm *.xlsx")])
         
         input_frame = tk.Frame(root)
         input_frame.pack(fill="x", padx=15, pady=15)
         
-        tk.Label(input_frame, text="3. 目标 Sheet (如 59):", font=("MS Gothic", 9, "bold")).pack(side="left")
-        self.sheet_entry = tk.Entry(input_frame, width=10, font=("Calibri", 11, "bold"), fg="blue")
+        tk.Label(input_frame, text="4. 需更新的目标 Sheet (如 95):", font=("MS Gothic", 9, "bold")).pack(side="left")
+        self.sheet_entry = tk.Entry(input_frame, width=15, font=("Calibri", 11, "bold"), fg="blue")
         self.sheet_entry.pack(side="left", padx=5)
         
-        tk.Label(input_frame, text="4. 需追加的新列号 (如 43):", font=("MS Gothic", 9, "bold")).pack(side="left", padx=(20, 0))
-        self.col_entry = tk.Entry(input_frame, width=10, font=("Calibri", 11, "bold"), fg="red")
-        self.col_entry.pack(side="left", padx=5)
-        
-        self.btn_start = tk.Button(root, text="🚀 仅执行追加 (不修复/不排序)", bg="#0078D7", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
+        self.btn_start = tk.Button(root, text="🚀 开始精准修正行坐标与逻辑 ID", bg="#0078D7", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
         self.btn_start.pack(fill="x", padx=15, pady=5, ipady=5)
         
         self.log_text = scrolledtext.ScrolledText(root, height=10, font=("Consolas", 10), bg="#1E1E1E", fg="#D4D4D4")
@@ -156,18 +231,18 @@ class PureAppenderApp:
             
     def start_process(self):
         csv_p = self.csv_entry.get().strip()
+        old_xl = self.old_xl_entry.get().strip()
         new_xl = self.new_xl_entry.get().strip()
         sheet_n = self.sheet_entry.get().strip()
-        add_col = self.col_entry.get().strip()
         
-        if not all([csv_p, new_xl, sheet_n, add_col]):
+        if not all([csv_p, old_xl, new_xl, sheet_n]):
             messagebox.showwarning("提示", "4 项输入均为必填！")
             return
             
         self.log_text.delete(1.0, tk.END)
-        process_pure_append(csv_p, new_xl, sheet_n, add_col, self.log_text)
+        process_row_logic_shift(csv_p, old_xl, new_xl, sheet_n, self.log_text)
 
 if __name__ == "__main__":
     app_root = tk.Tk()
-    app = PureAppenderApp(app_root)
+    app = RowLogicTranslatorApp(app_root)
     app_root.mainloop()
