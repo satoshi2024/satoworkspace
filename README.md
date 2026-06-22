@@ -59,8 +59,8 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
                     if len(logic_str) >= 2:
                         if logic_str not in [x["raw"] for x in extracted_items]:
                             extracted_items.append({
-                                "raw": logic_str, 
-                                "short": logic_str[:2] 
+                                "raw": logic_str,       # 对应 {行全}
+                                "short": logic_str[:2]  # 对应 {行2位}
                             })
 
         elif scan_mode == "COL":
@@ -74,14 +74,14 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
                             num = m.group(1)
                             if num not in [x["raw"] for x in extracted_items]:
                                 extracted_items.append({
-                                    "raw": num, 
-                                    "short": num[:2] if len(num) >= 2 else num
+                                    "raw": num,         # 对应 {列}
+                                    "short": num 
                                 })
                             break
             extracted_items = sorted(extracted_items, key=lambda x: int(x["raw"]))
 
         if not extracted_items:
-            messagebox.showerror("错误", "未能提取到任何有效 ID，请检查扫描模式或 Excel 内容。")
+            messagebox.showerror("错误", "未能提取到任何有效数据，请检查扫描模式或 Excel 内容。")
             return
             
         log_widget.insert(tk.END, f"➔ 成功提取到 {len(extracted_items)} 个动态变量。\n\n")
@@ -95,11 +95,12 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
         missing_count = 0
         
         for item in extracted_items:
-            raw_id = item["raw"]
-            short_id = item["short"]
+            raw_val = item["raw"]
+            short_val = item["short"]
             
-            item_name = item_template.replace("{ID}", raw_id).replace("{ID2}", short_id)
-            search_id = csv_id_template.replace("{ID}", raw_id).replace("{ID2}", short_id)
+            # 使用直白的中文占位符进行替换
+            item_name = item_template.replace("{行全}", raw_val).replace("{行2位}", short_val).replace("{列}", raw_val)
+            search_id = csv_id_template.replace("{行全}", raw_val).replace("{行2位}", short_val).replace("{列}", raw_val)
             
             # 现取坐标
             if search_id in csv_dict:
@@ -107,11 +108,11 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
                 c_cell = csv_dict[search_id]["cell"]
                 edit_method = f"表行列: S{search_id}\nシート番号: {c_sheet}\n座標: {c_cell}"
                 found_count += 1
-                log_widget.insert(tk.END, f" 🎯 查表命中: [尝试查询CSV ID: {search_id}] ➔ 坐标: {c_cell}\n")
+                log_widget.insert(tk.END, f" 🎯 命中: [CSV ID: {search_id}] ➔ 坐标: {c_cell}\n")
             else:
                 edit_method = f"表行列: S{search_id}\nシート番号: 未知\n座標: 未知"
                 missing_count += 1
-                log_widget.insert(tk.END, f" ⚠️ 未找到坐标: [尝试查询CSV ID: {search_id}] (字典中不存在该ID)\n")
+                log_widget.insert(tk.END, f" ⚠️ 未找到: [CSV ID: {search_id}] (字典中不存在)\n")
             
             row_data = [
                 str(current_idx), item_name, "", item_type, max_chars, align, 
@@ -125,9 +126,9 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
             writer = csv.writer(f)
             writer.writerows(output_rows)
             
-        log_widget.insert(tk.END, f"\n🎉 【生成完毕】\n成功匹配: {found_count} 个 | 失败: {missing_count} 个\n文件已保存: {os.path.basename(output_csv_path)}\n")
+        log_widget.insert(tk.END, f"\n🎉 【生成完毕】\n成功查表: {found_count} 个 | 失败: {missing_count} 个\n文件已保存: {os.path.basename(output_csv_path)}\n")
         log_widget.see(tk.END)
-        messagebox.showinfo("成功", f"式样书生成完毕！\n\n成功查询到 {found_count} 个坐标。\n请确认日志中的查询ID是否正确！")
+        messagebox.showinfo("成功", f"式样书生成完毕！\n\n成功查询到 {found_count} 个坐标。")
         
     except Exception as e:
         messagebox.showerror("系统错误", f"发生异常:\n{str(e)}")
@@ -135,7 +136,7 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
 class DynamicPatternApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("测试式样书生成器 (V4 智能联动防呆版)")
+        self.root.title("测试式样书生成器 (V5 直白占位符版)")
         self.root.geometry("700x780")
         
         def create_input_row(parent, label_text, default_val=""):
@@ -163,25 +164,25 @@ class DynamicPatternApp:
         self.excel_entry.pack(side="left", fill="x", expand=True, ipady=3)
         tk.Button(excel_frame, text="浏览...", width=10, command=lambda: self.browse_file(self.excel_entry, [("Excel", "*.xlsm *.xlsx")])).pack(side="right", padx=5)
 
-        tk.Label(root, text="2. 扫描来源模式 (点击切换会自动变换下方模板):", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+        tk.Label(root, text="2. 扫描来源模式:", font=("MS Gothic", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
         mode_frame = tk.Frame(root)
         mode_frame.pack(fill="x", padx=15)
-        self.mode_var = tk.StringVar(value="COL") # 默认选列模式
+        self.mode_var = tk.StringVar(value="ROW") 
         
         tk.Radiobutton(mode_frame, text="按【行番号】(扫 013, 023)", variable=self.mode_var, value="ROW", font=("MS Gothic", 9), command=self.update_templates).pack(side="left", padx=10)
         tk.Radiobutton(mode_frame, text="按【列表头】(扫 25, 26)", variable=self.mode_var, value="COL", font=("MS Gothic", 9), command=self.update_templates).pack(side="left", padx=10)
 
-        self.lbl_template_hint = tk.Label(root, text="3. 模板配置 ({ID}为列数字如 25):", font=("MS Gothic", 9, "bold"), fg="blue")
+        self.lbl_template_hint = tk.Label(root, text="3. 模板配置 (可用中文占位符: {行全}, {行2位}, {列}):", font=("MS Gothic", 9, "bold"), fg="blue")
         self.lbl_template_hint.pack(anchor="w", padx=15, pady=(10, 2))
         
         self.sheet_entry = create_input_row(root, "扫描目标 Sheet:", "69")
         self.start_idx_entry = create_input_row(root, "No (起始序号):", "17")
-        self.template_entry = create_input_row(root, "項目名 模板:", "({ID})_ラベル")
-        self.csv_id_template_entry = create_input_row(root, "CSV ID 匹配模板:", "1201{ID}") # 默认列模式公式
-        self.type_entry = create_input_row(root, "タイプ種別:", "ラベル")
-        self.max_char_entry = create_input_row(root, "最大文字数:", "4")
-        self.align_entry = create_input_row(root, "文字配置:", "指定無し")
-        self.font_entry = create_input_row(root, "文字フォント/サイズ:", "MS 明朝/ 8")
+        self.template_entry = create_input_row(root, "項目名 模板:", "市町村民税{行全}_特定親族特別控除")
+        self.csv_id_template_entry = create_input_row(root, "CSV ID 匹配模板:", "12{行2位}25") # 这里就是绝杀！
+        self.type_entry = create_input_row(root, "タイプ種別:", "テキスト")
+        self.max_char_entry = create_input_row(root, "最大文字数:", "13")
+        self.align_entry = create_input_row(root, "文字配置:", "右配置")
+        self.font_entry = create_input_row(root, "文字フォント/サイズ:", "MS Pゴシック/ 9")
 
         self.btn_start = tk.Button(root, text="🚀 现取坐标，一键生成", bg="#28A745", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
         self.btn_start.pack(fill="x", padx=15, pady=15, ipady=5)
@@ -192,17 +193,17 @@ class DynamicPatternApp:
     def update_templates(self):
         mode = self.mode_var.get()
         if mode == "ROW":
-            self.lbl_template_hint.config(text="3. 模板配置 ({ID}为完整行如013，{ID2}为前两位如01):")
+            self.lbl_template_hint.config(text="3. 模板配置 (可用占位符: {行全}=013, {行2位}=01):")
             self.template_entry.delete(0, tk.END)
-            self.template_entry.insert(0, "市町村民税{ID}_特定親族特別控除")
+            self.template_entry.insert(0, "市町村民税{行全}_特定親族特別控除")
             self.csv_id_template_entry.delete(0, tk.END)
-            self.csv_id_template_entry.insert(0, "12{ID2}25") # 行模式示例
+            self.csv_id_template_entry.insert(0, "12{行2位}25") # 完美匹配 12 + 行番 + 25
         else:
-            self.lbl_template_hint.config(text="3. 模板配置 (提取表头数字，{ID} 代表列号如 25):")
+            self.lbl_template_hint.config(text="3. 模板配置 (可用占位符: {列}=28):")
             self.template_entry.delete(0, tk.END)
-            self.template_entry.insert(0, "({ID})_ラベル")
+            self.template_entry.insert(0, "({列})_ラベル")
             self.csv_id_template_entry.delete(0, tk.END)
-            self.csv_id_template_entry.insert(0, "1201{ID}") # 列模式示例，固定行+动态列
+            self.csv_id_template_entry.insert(0, "1201{列}")
             
     def browse_file(self, entry_widget, f_types):
         path = filedialog.askopenfilename(filetypes=f_types)
@@ -223,8 +224,8 @@ class DynamicPatternApp:
         align = self.align_entry.get().strip()
         font_s = self.font_entry.get().strip()
         
-        if not csv_p or not excel_p or "{ID" not in template or "{ID" not in csv_id_template:
-            messagebox.showwarning("提示", "请选择文件，且【項目名模板】和【CSV ID模板】中必须含有 {ID} 占位符！")
+        if not csv_p or not excel_p:
+            messagebox.showwarning("提示", "请选择文件！")
             return
             
         self.log_text.delete(1.0, tk.END)
