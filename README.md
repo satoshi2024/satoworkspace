@@ -31,6 +31,9 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
         
         extracted_items = [] 
 
+        # ==========================================
+        # 扫描模式 ROW：提取行番号
+        # ==========================================
         if scan_mode == "ROW":
             id_col_start, id_row_start = None, None
             for r in range(1, 100):
@@ -59,33 +62,43 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
                     if len(logic_str) >= 2:
                         if logic_str not in [x["raw"] for x in extracted_items]:
                             extracted_items.append({
-                                "raw": logic_str,       # 对应 {行全}
-                                "short": logic_str[:2]  # 对应 {行2位}
+                                "raw": logic_str,       
+                                "short": logic_str[:2]  
                             })
 
+        # ==========================================
+        # 扫描模式 COL：提取列表头 (修复折叠表格漏扫问题)
+        # ==========================================
         elif scan_mode == "COL":
-            for c in range(1, ws.max_column + 10):
-                for r in range(1, 50):
+            # 地毯式扫描前 100 行 x 100 列，不再使用 break 中断！
+            for r in range(1, 100):
+                for c in range(1, 100):
                     val = ws.cell(row=r, column=c).value
                     if val is not None:
+                        # 转半角并去除空格
                         v_str = str(val).translate(str.maketrans('０１２３４５６７８９', '0123456789')).replace(" ", "").replace("　", "").strip()
-                        m = re.search(r'[\(（](\d+)[\)）]', v_str)
+                        # 绝杀正则：必须是纯粹的 (数字)，排除如 "(23万円)" 等干扰文本
+                        m = re.search(r'^[\(（](\d+)[\)）]$', v_str)
                         if m:
                             num = m.group(1)
                             if num not in [x["raw"] for x in extracted_items]:
                                 extracted_items.append({
-                                    "raw": num,         # 对应 {列}
+                                    "raw": num,         
                                     "short": num 
                                 })
-                            break
+            
+            # 按数字大小强制排序 (1, 2... 14... 31...)
             extracted_items = sorted(extracted_items, key=lambda x: int(x["raw"]))
 
         if not extracted_items:
             messagebox.showerror("错误", "未能提取到任何有效数据，请检查扫描模式或 Excel 内容。")
             return
             
-        log_widget.insert(tk.END, f"➔ 成功提取到 {len(extracted_items)} 个动态变量。\n\n")
+        log_widget.insert(tk.END, f"➔ 突破折叠排版，成功提取到 {len(extracted_items)} 个动态变量。\n\n")
 
+        # ==========================================
+        # 拼装 Pattern 表
+        # ==========================================
         log_widget.insert(tk.END, f"【3/3】正在现取坐标，拼装 Pattern 表...\n")
         output_rows = []
         output_rows.append(["No", "項目名", "選択項目No", "タイプ種別", "最大文字数", "文字配置", "領域外の対処", "文字フォント/サイズ", "編集箇所", "編集方法"])
@@ -98,11 +111,9 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
             raw_val = item["raw"]
             short_val = item["short"]
             
-            # 使用直白的中文占位符进行替换
             item_name = item_template.replace("{行全}", raw_val).replace("{行2位}", short_val).replace("{列}", raw_val)
             search_id = csv_id_template.replace("{行全}", raw_val).replace("{行2位}", short_val).replace("{列}", raw_val)
             
-            # 现取坐标
             if search_id in csv_dict:
                 c_sheet = csv_dict[search_id]["sheet"]
                 c_cell = csv_dict[search_id]["cell"]
@@ -136,7 +147,7 @@ def generate_dynamic_pattern_spec(csv_path, excel_path, sheet_name, scan_mode, s
 class DynamicPatternApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("测试式样书生成器 (V5 直白占位符版)")
+        self.root.title("测试式样书生成器 (V6 全向雷达穿透版)")
         self.root.geometry("700x780")
         
         def create_input_row(parent, label_text, default_val=""):
@@ -170,21 +181,21 @@ class DynamicPatternApp:
         self.mode_var = tk.StringVar(value="ROW") 
         
         tk.Radiobutton(mode_frame, text="按【行番号】(扫 013, 023)", variable=self.mode_var, value="ROW", font=("MS Gothic", 9), command=self.update_templates).pack(side="left", padx=10)
-        tk.Radiobutton(mode_frame, text="按【列表头】(扫 25, 26)", variable=self.mode_var, value="COL", font=("MS Gothic", 9), command=self.update_templates).pack(side="left", padx=10)
+        tk.Radiobutton(mode_frame, text="按【列表头】(扫 25, 31)", variable=self.mode_var, value="COL", font=("MS Gothic", 9), command=self.update_templates).pack(side="left", padx=10)
 
         self.lbl_template_hint = tk.Label(root, text="3. 模板配置 (可用中文占位符: {行全}, {行2位}, {列}):", font=("MS Gothic", 9, "bold"), fg="blue")
         self.lbl_template_hint.pack(anchor="w", padx=15, pady=(10, 2))
         
-        self.sheet_entry = create_input_row(root, "扫描目标 Sheet:", "69")
+        self.sheet_entry = create_input_row(root, "扫描目标 Sheet:", "88")
         self.start_idx_entry = create_input_row(root, "No (起始序号):", "17")
         self.template_entry = create_input_row(root, "項目名 模板:", "市町村民税{行全}_特定親族特別控除")
-        self.csv_id_template_entry = create_input_row(root, "CSV ID 匹配模板:", "12{行2位}25") # 这里就是绝杀！
+        self.csv_id_template_entry = create_input_row(root, "CSV ID 匹配模板:", "12{行2位}25") 
         self.type_entry = create_input_row(root, "タイプ種別:", "テキスト")
         self.max_char_entry = create_input_row(root, "最大文字数:", "13")
         self.align_entry = create_input_row(root, "文字配置:", "右配置")
         self.font_entry = create_input_row(root, "文字フォント/サイズ:", "MS Pゴシック/ 9")
 
-        self.btn_start = tk.Button(root, text="🚀 现取坐标，一键生成", bg="#28A745", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
+        self.btn_start = tk.Button(root, text="🚀 穿透折叠排版，一键生成", bg="#28A745", fg="white", font=("MS Gothic", 11, "bold"), command=self.start_process)
         self.btn_start.pack(fill="x", padx=15, pady=15, ipady=5)
         
         self.log_text = scrolledtext.ScrolledText(root, height=10, font=("Consolas", 10), bg="#1E1E1E", fg="#D4D4D4")
@@ -197,13 +208,13 @@ class DynamicPatternApp:
             self.template_entry.delete(0, tk.END)
             self.template_entry.insert(0, "市町村民税{行全}_特定親族特別控除")
             self.csv_id_template_entry.delete(0, tk.END)
-            self.csv_id_template_entry.insert(0, "12{行2位}25") # 完美匹配 12 + 行番 + 25
+            self.csv_id_template_entry.insert(0, "19{行2位}31") 
         else:
-            self.lbl_template_hint.config(text="3. 模板配置 (可用占位符: {列}=28):")
+            self.lbl_template_hint.config(text="3. 模板配置 (可用占位符: {列}=31):")
             self.template_entry.delete(0, tk.END)
             self.template_entry.insert(0, "({列})_ラベル")
             self.csv_id_template_entry.delete(0, tk.END)
-            self.csv_id_template_entry.insert(0, "1201{列}")
+            self.csv_id_template_entry.insert(0, "1901{列}")
             
     def browse_file(self, entry_widget, f_types):
         path = filedialog.askopenfilename(filetypes=f_types)
