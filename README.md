@@ -28,7 +28,7 @@ def build_5100_index(file_paths, log_callback):
     index = {}
     for fpath in file_paths:
         if not fpath or not os.path.exists(fpath): continue
-        log_callback(f"正在强力扫描建立索引: {os.path.basename(fpath)} ... (请稍候)")
+        log_callback(f"正在启动碎片拼接扫描: {os.path.basename(fpath)} ... (请稍候)")
         
         try:
             wb = load_workbook(fpath, data_only=True)
@@ -41,52 +41,84 @@ def build_5100_index(file_paths, log_callback):
                 index[sheet_name] = {'rows': {}, 'cols': {}}
             ws = wb[sheet_name]
 
-            # 1. 扩大“行番号”列的搜索范围（应对合并单元格）
-            xing_cols = set()
-            for row in ws.iter_rows(min_row=1, max_row=50):
-                for cell in row:
+            # ==========================================
+            # 1. 寻找“行番号”所在的锚点位置
+            # ==========================================
+            xing_col_idx = -1
+            xing_row_idx = -1
+            for r_idx in range(1, 100):
+                for cell in ws[r_idx]:
                     if cell.value:
-                        # 强制转半角并去掉空格
                         val_str = unicodedata.normalize('NFKC', str(cell.value)).replace(" ", "")
                         if "行番号" in val_str:
-                            # 包含自身及向右偏移的3列，防止 Excel 合并单元格导致数据藏在右边
-                            xing_cols.update([cell.column, cell.column+1, cell.column+2, cell.column+3])
-            
-            # 2. 全表地毯式搜索坐标
-            for row in ws.iter_rows():
-                for cell in row:
-                    if cell.value is None: continue
-                    
-                    # 统一转换为半角，这是破解日文 Excel 格式的关键
-                    raw_str = str(cell.value)
-                    val_str = unicodedata.normalize('NFKC', raw_str)
-                    
-                    # --- 寻找列坐标: (1), (12), <12>, [12] (无视前后的多余文字或换行) ---
-                    col_match = re.search(r'[\(\[<]\s*(\d+)\s*[\)\]>]', val_str)
-                    if col_match:
-                        col_num = str(int(col_match.group(1))) # 把 01 变成 1，12 变成 12
-                        if col_num not in index[sheet_name]['cols']:
-                            index[sheet_name]['cols'][col_num] = cell.column_letter
+                            xing_col_idx = cell.column
+                            xing_row_idx = cell.row
+                            break
+                if xing_col_idx != -1: break
 
-                    # --- 寻找行坐标: 0 1 1, 0:1:1, 011 ---
-                    if cell.column in xing_cols:
-                        # 暴力剔除一切空格、冒号、小数点等干扰符
-                        clean_val = re.sub(r'[\s:：.-]', '', val_str)
-                        if clean_val.isdigit():
-                            # 将数字补齐为3位，例如 11 补齐为 011
-                            padded = f"{int(clean_val):03d}"
-                            if len(padded) == 3: # 确保是标准3位数
-                                row_code = padded[:2] # 取前两位
-                                # 只保留第一次找到的行号（最上方的）
-                                if row_code not in index[sheet_name]['rows']:
-                                    index[sheet_name]['rows'][row_code] = cell.row
+            # ==========================================
+            # 2. 智能提取表头列 (Columns)
+            # ==========================================
+            cols_map = {}
+            for r_idx in range(1, 100):
+                row_pure_numbers = {}
+                row_paren_numbers = {}
+                for cell in ws[r_idx]:
+                    if cell.value is not None:
+                        val_str = unicodedata.normalize('NFKC', str(cell.value)).strip()
+                        
+                        # 匹配 (12), [12], （１２）
+                        m_paren = re.match(r'^[\(\[<（]?\s*(\d+)\s*[\)\]>）]?$', val_str)
+                        if m_paren:
+                            num = str(int(m_paren.group(1))) # 01 变 1，12 变 12
+                            if "(" in val_str or "（" in val_str or "<" in val_str:
+                                row_paren_numbers[num] = cell.column_letter
+                            elif int(num) <= 150: # 纯数字不能太大
+                                row_pure_numbers[num] = cell.column_letter
+                
+                # 保存括号数字
+                for k, v in row_paren_numbers.items():
+                    if k not in cols_map: cols_map[k] = v
+                
+                # 如果这行有多个数字，说明确实是表头行，存入纯数字
+                if len(row_pure_numbers) >= 2 or len(row_paren_numbers) >= 1:
+                    for k, v in row_pure_numbers.items():
+                        if k not in cols_map: cols_map[k] = v
+            
+            index[sheet_name]['cols'] = cols_map
+
+            # ==========================================
+            # 3. 智能提取行番号 (Rows) - 碎片拼接法
+            # ==========================================
+            rows_map = {}
+            if xing_col_idx != -1:
+                # 从“行番号”下一行开始往下扫
+                for r_idx in range(xing_row_idx + 1, ws.max_row + 1):
+                    digits = []
+                    # 针对“方眼纸”排版：向右扫描 15 个极其狭窄的单元格，把打碎的数字吸起来
+                    for c_idx in range(xing_col_idx, xing_col_idx + 15):
+                        cell = ws.cell(row=r_idx, column=c_idx)
+                        if cell.value is not None:
+                            val_str = unicodedata.normalize('NFKC', str(cell.value))
+                            # 提取所有数字字符
+                            for char in val_str:
+                                if char.isdigit():
+                                    digits.append(char)
+                    
+                    if len(digits) >= 2:
+                        # 你的规则：3位行番号，无视第三位 -> 取前两位 (如 0,4,1 变成 "04")
+                        row_code = "".join(digits[:2])
+                        if row_code not in rows_map:
+                            rows_map[row_code] = r_idx
+            
+            index[sheet_name]['rows'] = rows_map
         wb.close()
     return index
 
 class UpdateSendApp:
     def __init__(self, root):
         self.root = root
-        root.title("DafKazei 坐标动态计算工具 v3.1 (全角破解版)")
+        root.title("DafKazei 坐标动态计算工具 v3.2 (方眼纸粉碎版)")
         root.geometry("860x650")
         self.wrt_path, self.send_path = tk.StringVar(), tk.StringVar()
         self.file5100_1_path, self.file5100_2_path = tk.StringVar(), tk.StringVar()
@@ -137,7 +169,6 @@ class UpdateSendApp:
             df_send = read_any_file(send_file)
             max_cols = max(len(df_send.columns), 5)
             
-            # 建立旧 SEND 索引以保留多余列
             send_dict = {}
             for _, row in df_send.iterrows():
                 b_val = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
@@ -146,60 +177,59 @@ class UpdateSendApp:
                     lst.extend([""] * (max_cols - len(lst)))
                     send_dict[b_val] = lst
 
-            # 构建 5100 坐标字典
-            self.log("=== 开始破解并解析 5100 坐标结构 ===")
+            self.log("=== 开始读取并破解 5100 坐标结构 ===")
             index_5100 = build_5100_index([f5100_1, f5100_2], self.log)
             self.log("✅ 5100 坐标字典建立完成！\n")
 
             new_data = []
             calc_success = 0
             calc_fail = 0
+            intercept_count = 0
 
-            self.log("=== 开始根据 WRT 的 A 列计算最新坐标 ===")
+            self.log("=== 开始计算最新坐标 ===")
             for _, wrt_row in df_wrt.iterrows():
                 wrt_a = str(wrt_row.iloc[0]).strip() if pd.notna(wrt_row.iloc[0]) else ""
                 wrt_b = str(wrt_row.iloc[1]).strip() if pd.notna(wrt_row.iloc[1]) else ""
                 wrt_c = str(wrt_row.iloc[2]).strip() if pd.notna(wrt_row.iloc[2]) else ""
                 if not wrt_b: continue
                 
-                # 继承结构
                 cur_row = send_dict.get(wrt_b, [""] * max_cols).copy()
                 cur_row[0], cur_row[1] = wrt_a, wrt_b
                 if wrt_c: cur_row[2] = wrt_c
 
-                # === 核心：根据 A 列计算 D 和 E ===
                 if len(wrt_a) >= 5 and wrt_a.isdigit():
-                    col_code = str(int(wrt_a[-2:]))  # 最后2位（列代码，如 12）
-                    row_code = wrt_a[-4:-2]          # 中间2位（行代码，如 04）
-                    sheet_num = wrt_a[:-4]           # 剩下的前缀（如 11 或 60）
+                    # 解析 A 列：前缀=表名，中间两位=行号，最后两位=列表头
+                    col_code = str(int(wrt_a[-2:]))
+                    row_code = wrt_a[-4:-2]
+                    sheet_num = wrt_a[:-4]
                     target_sheet = f"表{sheet_num}"
                     
                     if target_sheet in index_5100:
-                        cur_row[3] = target_sheet # 写入 D 列
+                        cur_row[3] = target_sheet 
                         
                         r = index_5100[target_sheet]['rows'].get(row_code)
                         c_letter = index_5100[target_sheet]['cols'].get(col_code)
                         
                         if r and c_letter:
-                            # 成功计算出最新坐标！
-                            new_coord = f"{c_letter}{r}"
-                            cur_row[4] = new_coord
+                            cur_row[4] = f"{c_letter}{r}"
                             calc_success += 1
                         else:
                             calc_fail += 1
-                            self.log(f"⚠️ [警告] A={wrt_a} ({target_sheet}): 找不到 行番号[{row_code}] 或 表头列[({col_code})]，保留了原坐标。")
+                            if calc_fail <= 10: # 最多打印10条防止刷屏
+                                self.log(f"⚠️ [警告] A={wrt_a}: 找到了 {target_sheet}，但在表中没找到 行[{row_code}] 或 列[({col_code})]")
                     else:
-                        calc_fail += 1
-                        self.log(f"🛑 [拦截] A={wrt_a}: 目标表 [{target_sheet}] 在5100文件中不存在！")
+                        intercept_count += 1
+                        if intercept_count <= 10:
+                            self.log(f"🛑 [拦截] A={wrt_a}: 目标表 [{target_sheet}] 不存在，保持原样。")
                 
                 new_data.append(cur_row)
 
-            # 输出文件
             output_path = os.path.splitext(send_file)[0] + "_updated.csv"
             pd.DataFrame(new_data).to_csv(output_path, index=False, header=False, encoding='utf-8-sig')
 
             self.log(f"\n✅ 全部处理完成！共生成 {len(new_data)} 行。")
-            self.log(f"🎯 成功动态计算并更新坐标 (E列)：{calc_success} 条")
+            self.log(f"🎯 成功动态计算并更新了 {calc_success} 个新坐标！")
+            self.log(f"🛑 有 {intercept_count} 行因为表不存在被拦截。")
             self.log(f"保留原有 SEND 结构，文件已保存至：{os.path.basename(output_path)}")
 
         except Exception as e:
