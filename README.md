@@ -59,14 +59,25 @@ def get_all_sheet_names(file_paths):
 def parse_a_to_sheet_and_coord(a_val):
     """
     根据用户规则解析 A 列，生成 D (sheet)
-    通用规则（已按最新反馈修正）：
-    - 如果 A 是 6 位数字 → 取前两位作为表号（表12、表15、表11 等）
-    - 如果 A 是 5 位数字 → 取第一位作为表号（表6、表7 等）
-    - E 列暂时不覆盖，保留旧 SEND 中正确的 Excel 样式坐标
+    通用规则 + 健壮清洗（修复 float/.0 导致的6位数识别失败）：
+    - 先把 A 清洗成纯数字字符串（去掉 .0、科学计数法等）
+    - 6 位数字 → 取前两位（表12、表15 等）
+    - 5 位数字 → 取第一位（表6、表7 等）
+    - E 列暂时不覆盖
     """
     if pd.isna(a_val):
         return "", ""
+
+    # 健壮清洗 A 值
     a_str = str(a_val).strip()
+    if '.' in a_str:
+        a_str = a_str.split('.')[0]
+    if 'e' in a_str.lower():
+        try:
+            a_str = str(int(float(a_str)))
+        except:
+            pass
+
     if not a_str or not a_str.isdigit():
         return "", ""
 
@@ -77,7 +88,6 @@ def parse_a_to_sheet_and_coord(a_val):
         sheet_num = a_str[0]       # 5位或其他 → 表6, 表7 等
     sheet_name = f"表{sheet_num}"
 
-    # E 列返回空，不覆盖（保留旧SEND正确的坐标格式）
     return sheet_name, ""
 
 class UpdateSendApp:
