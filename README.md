@@ -10,6 +10,7 @@ import re
 import unicodedata
 from datetime import datetime
 
+
 def read_any_file(path):
     if not path or not os.path.exists(path):
         return None
@@ -28,7 +29,7 @@ def read_any_file(path):
 
 
 def build_5100_index(file_paths, log_callback):
-    """全域自适应扫描 5100 文件"""
+    """全域自适应扫描 5100 文件，提取行号和列号映射"""
     index = {}
     for fpath in file_paths:
         if not fpath or not os.path.exists(fpath):
@@ -53,6 +54,7 @@ def build_5100_index(file_paths, log_callback):
                             if m:
                                 col_anchors.append((m.group(1), cell))
 
+                # 提取行号映射
                 if row_anchor:
                     for r_idx in range(row_anchor.row + 1, ws.max_row + 1):
                         digits = []
@@ -65,8 +67,10 @@ def build_5100_index(file_paths, log_callback):
                             row_code = "".join(digits[:2])
                             index[sheet_name]['rows'][row_code] = r_idx
 
+                # 提取列号映射
                 for num, cell in col_anchors:
                     index[sheet_name]['cols'][num] = cell.column_letter
+
             wb.close()
         except Exception as e:
             log_callback(f"❌ 扫描错误: {e}")
@@ -77,30 +81,45 @@ def get_smart_sheet_candidates(a_str):
     """智能生成 Sheet 候选名称"""
     candidates = []
     if len(a_str) >= 6:
-        prefix2 = a_str[:2]
-        candidates.append(f"表{prefix2}")
-        candidates.append(f"表0{prefix2}" if len(prefix2) == 1 else f"表{prefix2}")
+        prefix = a_str[:2]
+        candidates.extend([f"表{prefix}", f"表0{prefix}", f"第{prefix}表"])
     else:
-        prefix1 = a_str[0]
-        candidates.append(f"表{prefix1}")
-        candidates.append(f"表0{prefix1}")
-        candidates.append(f"第{prefix1}表")
-    return list(dict.fromkeys(candidates))  # 去重
+        prefix = a_str[0]
+        candidates.extend([f"表{prefix}", f"表0{prefix}", f"第{prefix}表"])
+    return list(dict.fromkeys(candidates))
+
+
+def get_row_code(a_str):
+    if len(a_str) < 4:
+        return ""
+    return a_str[-4:-2]
+
+
+def get_col_code(a_str):
+    """改进后的列号提取（支持单数列）"""
+    if len(a_str) < 2:
+        return ""
+    last_two = a_str[-2:]
+    if last_two.startswith('0') and last_two[1].isdigit():
+        return last_two[1]          # 01 → 1
+    return last_two
 
 
 class UpdateSendApp:
     def __init__(self, root):
         self.root = root
-        root.title("DafKazei 智能坐标同步工具 v3.5 (改进版)")
-        root.geometry("860x650")
+        root.title("DafKazei 智能坐标同步工具 v3.6")
+        root.geometry("880x680")
+
         self.wrt_path = tk.StringVar()
         self.send_path = tk.StringVar()
         self.file5100_1_path = tk.StringVar()
         self.file5100_2_path = tk.StringVar()
+
         self.create_widgets()
 
     def create_widgets(self):
-        tk.Label(self.root, text="Send 坐标动态定位与同步工具 v3.5", font=("Microsoft YaHei", 15, "bold")).pack(pady=10)
+        tk.Label(self.root, text="Send 坐标动态定位与同步工具", font=("Microsoft YaHei", 16, "bold")).pack(pady=10)
 
         frame = tk.Frame(self.root)
         frame.pack(padx=20, pady=5, fill="x")
@@ -116,12 +135,12 @@ class UpdateSendApp:
                                  bg="#27ae60", fg="white", font=("Microsoft YaHei", 12, "bold"), width=26)
         self.run_btn.pack(side="left", padx=10)
 
-        self.log_text = scrolledtext.ScrolledText(self.root, height=22, width=100, font=("Consolas", 9), bg="#f8f9fa")
+        self.log_text = scrolledtext.ScrolledText(self.root, height=24, width=105, font=("Consolas", 9), bg="#f8f9fa")
         self.log_text.pack(padx=20, pady=5, fill="both", expand=True)
 
     def _add_row(self, p, txt, var, cmd, r):
         tk.Label(p, text=txt, width=20, anchor="e").grid(row=r, column=0, pady=5)
-        tk.Entry(p, textvariable=var, width=55).grid(row=r, column=1, padx=5)
+        tk.Entry(p, textvariable=var, width=58).grid(row=r, column=1, padx=5)
         tk.Button(p, text="浏览...", command=cmd).grid(row=r, column=2)
 
     def sel_wrt(self): self.wrt_path.set(filedialog.askopenfilename())
@@ -141,7 +160,7 @@ class UpdateSendApp:
         f5100_2 = self.file5100_2_path.get().strip()
 
         if not wrt_file or not send_file:
-            return messagebox.showerror("错误", "请选择 WRT 和 SEND 文件")
+            return messagebox.showerror("错误", "必须选择 WRT 和 SEND 文件")
 
         self.run_btn.config(state="disabled", text="处理中...")
         self.log_text.delete("1.0", tk.END)
@@ -151,6 +170,7 @@ class UpdateSendApp:
             df_send = read_any_file(send_file)
             max_cols = max(len(df_send.columns), 5)
 
+            # 建立旧 SEND 索引
             send_dict = {}
             for _, row in df_send.iterrows():
                 b_val = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
@@ -172,54 +192,44 @@ class UpdateSendApp:
                 if not b:
                     continue
 
+                # 继承旧 SEND 整行
                 cur_row = send_dict.get(b, [""] * max_cols).copy()
                 cur_row[0] = a
                 cur_row[1] = b
                 cur_row[2] = c
 
-                # === 智能 Sheet 匹配 ===
+                # === 智能 Sheet + 坐标计算 ===
                 if len(a) >= 5 and a.isdigit():
                     candidates = get_smart_sheet_candidates(a)
-                    target_sheet = None
-                    for cand in candidates:
-                        if cand in index_5100:
-                            target_sheet = cand
-                            break
+                    target_sheet = next((s for s in candidates if s in index_5100), None)
 
                     if target_sheet:
                         cur_row[3] = target_sheet
-                        self.log(f"✓ Sheet 匹配成功: {a} -> {target_sheet}")
 
-                        # 尝试计算 E 列坐标
-                        try:
-                            col_code = a[-2:]
-                            row_code = a[-4:-2]
-                            rows_dict = index_5100[target_sheet]['rows']
-                            cols_dict = index_5100[target_sheet]['cols']
+                        row_code = get_row_code(a)
+                        col_code = get_col_code(a)
 
-                            actual_row = rows_dict.get(row_code)
-                            actual_col = cols_dict.get(col_code)
+                        actual_row = index_5100[target_sheet]['rows'].get(row_code)
+                        actual_col = index_5100[target_sheet]['cols'].get(col_code)
 
-                            if actual_row and actual_col:
-                                cur_row[4] = f"{actual_col}{actual_row}"
-                                self.log(f"  → 新坐标: {cur_row[4]}")
-                            else:
-                                self.log(f"  ⚠️ 行/列未找到 -> row_code={row_code}, col_code={col_code}")
-                        except Exception as e:
-                            self.log(f"  ❌ 计算坐标出错: {e}")
+                        if actual_row and actual_col:
+                            cur_row[4] = f"{actual_col}{actual_row}"
+                            self.log(f"✓ {a} -> {target_sheet} | 新坐标: {cur_row[4]}")
+                        else:
+                            self.log(f"⚠️ {a} | Sheet={target_sheet} | 行/列未找到 (row={row_code}, col={col_code})")
                     else:
-                        self.log(f"⚠️ 未找到匹配的 Sheet: {a}，尝试过: {candidates}")
+                        self.log(f"⚠️ {a} 未匹配到 Sheet，尝试过: {candidates}")
 
                 new_data.append(cur_row)
 
             output_path = os.path.splitext(send_file)[0] + "_updated.csv"
             pd.DataFrame(new_data).to_csv(output_path, index=False, header=False, encoding='utf-8-sig')
 
-            self.log(f"\n✅ 处理完成！文件已保存: {output_path}")
+            self.log(f"\n✅ 处理完成！文件已保存至: {output_path}")
             self.log(f"总行数: {len(new_data)}")
 
         except Exception as e:
-            self.log(f"❌ 发生错误: {e}")
+            self.log(f"❌ 发生错误: {str(e)}")
         finally:
             self.run_btn.config(state="normal", text="开始同步并计算新坐标")
 
