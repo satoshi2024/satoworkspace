@@ -7,6 +7,7 @@ import pandas as pd
 from openpyxl import load_workbook
 import os
 import re
+import unicodedata
 from datetime import datetime
 
 def read_any_file(path):
@@ -15,7 +16,8 @@ def read_any_file(path):
     if ext == '.csv':
         for enc in ['utf-8-sig', 'cp932', 'shift_jis', 'gbk', 'utf-8']:
             try:
-                return pd.read_csv(path, header=None, encoding=enc, dtype=str, low_memory=False)
+                df = pd.read_csv(path, header=None, encoding=enc, dtype=str, low_memory=False)
+                if not df.empty: return df
             except Exception:
                 continue
         return pd.read_csv(path, header=None, dtype=str, low_memory=False)
@@ -23,50 +25,59 @@ def read_any_file(path):
         return pd.read_excel(path, header=None, dtype=str)
 
 def build_5100_index(file_paths, log_callback):
-    """
-    核心升级：深度扫描 5100 文件，建立【行番号】和【表头列】的坐标字典
-    """
     index = {}
     for fpath in file_paths:
         if not fpath or not os.path.exists(fpath): continue
-        log_callback(f"正在扫描建立索引: {os.path.basename(fpath)} ... (这可能需要几秒钟)")
+        log_callback(f"正在强力扫描建立索引: {os.path.basename(fpath)} ... (请稍候)")
         
-        wb = load_workbook(fpath, data_only=True)
+        try:
+            wb = load_workbook(fpath, data_only=True)
+        except Exception as e:
+            log_callback(f"❌ 无法读取文件: {e}")
+            continue
+
         for sheet_name in wb.sheetnames:
             if sheet_name not in index:
                 index[sheet_name] = {'rows': {}, 'cols': {}}
             ws = wb[sheet_name]
 
-            # 1. 寻找“行番号”所在的列号
-            xing_cols = []
+            # 1. 扩大“行番号”列的搜索范围（应对合并单元格）
+            xing_cols = set()
             for row in ws.iter_rows(min_row=1, max_row=50):
                 for cell in row:
-                    if cell.value and isinstance(cell.value, str):
-                        if "行番号" in str(cell.value).replace(" ", ""):
-                            xing_cols.append(cell.column)
+                    if cell.value:
+                        # 强制转半角并去掉空格
+                        val_str = unicodedata.normalize('NFKC', str(cell.value)).replace(" ", "")
+                        if "行番号" in val_str:
+                            # 包含自身及向右偏移的3列，防止 Excel 合并单元格导致数据藏在右边
+                            xing_cols.update([cell.column, cell.column+1, cell.column+2, cell.column+3])
             
-            # 2. 遍历整个 sheet 建立映射
+            # 2. 全表地毯式搜索坐标
             for row in ws.iter_rows():
                 for cell in row:
-                    val = cell.value
-                    if val is None: continue
-                    val_str = str(val).strip()
-
-                    # 匹配列坐标：寻找 (1), (12), （7） 等表头
-                    col_match = re.match(r'^[(（]\s*(\d+)\s*[)）]$', val_str)
+                    if cell.value is None: continue
+                    
+                    # 统一转换为半角，这是破解日文 Excel 格式的关键
+                    raw_str = str(cell.value)
+                    val_str = unicodedata.normalize('NFKC', raw_str)
+                    
+                    # --- 寻找列坐标: (1), (12), <12>, [12] (无视前后的多余文字或换行) ---
+                    col_match = re.search(r'[\(\[<]\s*(\d+)\s*[\)\]>]', val_str)
                     if col_match:
-                        col_num = str(int(col_match.group(1))) # 提取数字如 '12'
+                        col_num = str(int(col_match.group(1))) # 把 01 变成 1，12 变成 12
                         if col_num not in index[sheet_name]['cols']:
                             index[sheet_name]['cols'][col_num] = cell.column_letter
 
-                    # 匹配行坐标：寻找行番号
-                    if xing_cols and cell.column in xing_cols:
-                        clean_val = val_str.replace(" ", "")
+                    # --- 寻找行坐标: 0 1 1, 0:1:1, 011 ---
+                    if cell.column in xing_cols:
+                        # 暴力剔除一切空格、冒号、小数点等干扰符
+                        clean_val = re.sub(r'[\s:：.-]', '', val_str)
                         if clean_val.isdigit():
-                            # 补齐3位并取前2位（无视第三位）
+                            # 将数字补齐为3位，例如 11 补齐为 011
                             padded = f"{int(clean_val):03d}"
-                            if len(padded) == 3:
-                                row_code = padded[:2] # 如 051 -> 05
+                            if len(padded) == 3: # 确保是标准3位数
+                                row_code = padded[:2] # 取前两位
+                                # 只保留第一次找到的行号（最上方的）
                                 if row_code not in index[sheet_name]['rows']:
                                     index[sheet_name]['rows'][row_code] = cell.row
         wb.close()
@@ -75,7 +86,7 @@ def build_5100_index(file_paths, log_callback):
 class UpdateSendApp:
     def __init__(self, root):
         self.root = root
-        root.title("DafKazei 坐标动态计算工具 v3.0 (终极版)")
+        root.title("DafKazei 坐标动态计算工具 v3.1 (全角破解版)")
         root.geometry("860x650")
         self.wrt_path, self.send_path = tk.StringVar(), tk.StringVar()
         self.file5100_1_path, self.file5100_2_path = tk.StringVar(), tk.StringVar()
@@ -136,7 +147,7 @@ class UpdateSendApp:
                     send_dict[b_val] = lst
 
             # 构建 5100 坐标字典
-            self.log("=== 开始解析 5100 坐标结构 ===")
+            self.log("=== 开始破解并解析 5100 坐标结构 ===")
             index_5100 = build_5100_index([f5100_1, f5100_2], self.log)
             self.log("✅ 5100 坐标字典建立完成！\n")
 
@@ -160,7 +171,7 @@ class UpdateSendApp:
                 if len(wrt_a) >= 5 and wrt_a.isdigit():
                     col_code = str(int(wrt_a[-2:]))  # 最后2位（列代码，如 12）
                     row_code = wrt_a[-4:-2]          # 中间2位（行代码，如 04）
-                    sheet_num = wrt_a[:-4]           # 剩下的前缀（如 11 或 6）
+                    sheet_num = wrt_a[:-4]           # 剩下的前缀（如 11 或 60）
                     target_sheet = f"表{sheet_num}"
                     
                     if target_sheet in index_5100:
@@ -172,7 +183,6 @@ class UpdateSendApp:
                         if r and c_letter:
                             # 成功计算出最新坐标！
                             new_coord = f"{c_letter}{r}"
-                            old_coord = cur_row[4]
                             cur_row[4] = new_coord
                             calc_success += 1
                         else:
