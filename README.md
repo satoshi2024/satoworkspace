@@ -31,12 +31,12 @@ def read_any_file(path):
     if ext == '.csv':
         for enc in ['utf-8-sig', 'cp932', 'shift_jis', 'gbk', 'utf-8']:
             try:
-                df = pd.read_csv(path, header=None, encoding=enc, dtype=str)
+                df = pd.read_csv(path, header=None, encoding=enc, dtype=str, low_memory=False)
                 return df
             except Exception:
                 continue
         # 最后尝试不指定编码
-        return pd.read_csv(path, header=None, dtype=str)
+        return pd.read_csv(path, header=None, dtype=str, low_memory=False)
     else:
         # xlsx / xlsm
         return pd.read_excel(path, header=None, dtype=str)
@@ -58,12 +58,11 @@ def get_all_sheet_names(file_paths):
 
 def parse_a_to_sheet_and_coord(a_val):
     """
-    根据用户规则解析 A 列，生成 D (sheet) 和 E (坐标)
-    规则：
-    - 前1位或前2位决定 sheet（表X）
-      - 62501 → 表6
-      - 152501 → 表15
-    - 后四位决定逻辑坐标（行番号 + 列），行番号取前两位（无视第三位）
+    根据用户规则解析 A 列，生成 D (sheet)
+    通用规则（已按最新反馈修正）：
+    - 如果 A 是 6 位数字 → 取前两位作为表号（表12、表15、表11 等）
+    - 如果 A 是 5 位数字 → 取第一位作为表号（表6、表7 等）
+    - E 列暂时不覆盖，保留旧 SEND 中正确的 Excel 样式坐标
     """
     if pd.isna(a_val):
         return "", ""
@@ -71,24 +70,15 @@ def parse_a_to_sheet_and_coord(a_val):
     if not a_str or not a_str.isdigit():
         return "", ""
 
-    # === Sheet 名解析 ===
-    if len(a_str) >= 6 and a_str[:2] in ['15', '16', '17', '18', '19']:
-        sheet_num = a_str[:2]
+    # === Sheet 名解析（通用规则） ===
+    if len(a_str) == 6:
+        sheet_num = a_str[:2]      # 6位 → 表12, 表15, 表11 等
     else:
-        sheet_num = a_str[0]
+        sheet_num = a_str[0]       # 5位或其他 → 表6, 表7 等
     sheet_name = f"表{sheet_num}"
 
-    # === 坐标解析（后四位）===
-    if len(a_str) >= 5:
-        last4 = a_str[-4:]
-        row_num = last4[:2]          # 例如 "05"
-        col_num = last4[2] if len(last4) > 2 else last4[2:]  # "1"
-        # 这里先用简单逻辑坐标，用户可根据实际需要改成真实 Excel 单元格地址
-        coord = f"R{row_num}C{col_num}"
-    else:
-        coord = ""
-
-    return sheet_name, coord
+    # E 列返回空，不覆盖（保留旧SEND正确的坐标格式）
+    return sheet_name, ""
 
 class UpdateSendApp:
     def __init__(self, root):
