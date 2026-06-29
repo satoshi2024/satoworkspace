@@ -6,225 +6,196 @@ from tkinter import filedialog, messagebox, scrolledtext
 import pandas as pd
 from openpyxl import load_workbook
 import os
+import re
 from datetime import datetime
 
 def read_any_file(path):
-    if not path or not os.path.exists(path):
-        return None
+    if not path or not os.path.exists(path): return None
     ext = os.path.splitext(path)[1].lower()
     if ext == '.csv':
         for enc in ['utf-8-sig', 'cp932', 'shift_jis', 'gbk', 'utf-8']:
             try:
-                df = pd.read_csv(path, header=None, encoding=enc, dtype=str, low_memory=False)
-                return df
+                return pd.read_csv(path, header=None, encoding=enc, dtype=str, low_memory=False)
             except Exception:
                 continue
         return pd.read_csv(path, header=None, dtype=str, low_memory=False)
     else:
         return pd.read_excel(path, header=None, dtype=str)
 
-def get_all_sheet_names(file_paths):
-    all_sheets = set()
+def build_5100_index(file_paths, log_callback):
+    """
+    核心升级：深度扫描 5100 文件，建立【行番号】和【表头列】的坐标字典
+    """
+    index = {}
     for fpath in file_paths:
-        if not fpath or not os.path.exists(fpath):
-            continue
-        try:
-            wb = load_workbook(fpath, read_only=True, data_only=False)
-            all_sheets.update(wb.sheetnames)
-            wb.close()
-        except Exception as e:
-            print(f"警告: 无法读取 {fpath} 的 sheets: {e}")
-    return all_sheets
+        if not fpath or not os.path.exists(fpath): continue
+        log_callback(f"正在扫描建立索引: {os.path.basename(fpath)} ... (这可能需要几秒钟)")
+        
+        wb = load_workbook(fpath, data_only=True)
+        for sheet_name in wb.sheetnames:
+            if sheet_name not in index:
+                index[sheet_name] = {'rows': {}, 'cols': {}}
+            ws = wb[sheet_name]
 
-def parse_a_to_sheet(a_val):
-    """仅仅解析出目标 Sheet 名称，不做多余操作"""
-    if pd.isna(a_val):
-        return ""
-    a_str = str(a_val).strip()
-    if '.' in a_str:
-        a_str = a_str.split('.')[0]
-    if 'e' in a_str.lower():
-        try:
-            a_str = str(int(float(a_str)))
-        except:
-            pass
-    if not a_str or not a_str.isdigit():
-        return ""
+            # 1. 寻找“行番号”所在的列号
+            xing_cols = []
+            for row in ws.iter_rows(min_row=1, max_row=50):
+                for cell in row:
+                    if cell.value and isinstance(cell.value, str):
+                        if "行番号" in str(cell.value).replace(" ", ""):
+                            xing_cols.append(cell.column)
+            
+            # 2. 遍历整个 sheet 建立映射
+            for row in ws.iter_rows():
+                for cell in row:
+                    val = cell.value
+                    if val is None: continue
+                    val_str = str(val).strip()
 
-    if len(a_str) >= 6:
-        sheet_num = a_str[:2]
-    else:
-        sheet_num = a_str[0]
-    return f"表{sheet_num}"
+                    # 匹配列坐标：寻找 (1), (12), （7） 等表头
+                    col_match = re.match(r'^[(（]\s*(\d+)\s*[)）]$', val_str)
+                    if col_match:
+                        col_num = str(int(col_match.group(1))) # 提取数字如 '12'
+                        if col_num not in index[sheet_name]['cols']:
+                            index[sheet_name]['cols'][col_num] = cell.column_letter
 
+                    # 匹配行坐标：寻找行番号
+                    if xing_cols and cell.column in xing_cols:
+                        clean_val = val_str.replace(" ", "")
+                        if clean_val.isdigit():
+                            # 补齐3位并取前2位（无视第三位）
+                            padded = f"{int(clean_val):03d}"
+                            if len(padded) == 3:
+                                row_code = padded[:2] # 如 051 -> 05
+                                if row_code not in index[sheet_name]['rows']:
+                                    index[sheet_name]['rows'][row_code] = cell.row
+        wb.close()
+    return index
 
 class UpdateSendApp:
     def __init__(self, root):
         self.root = root
-        root.title("DafKazei Send 文件更新工具 v2.0 (精准修复版)")
-        root.geometry("820x620")
-        root.resizable(True, True)
-
-        self.wrt_path = tk.StringVar()
-        self.send_path = tk.StringVar()
-        self.file5100_1_path = tk.StringVar()
-        self.file5100_2_path = tk.StringVar()
-
+        root.title("DafKazei 坐标动态计算工具 v3.0 (终极版)")
+        root.geometry("860x650")
+        self.wrt_path, self.send_path = tk.StringVar(), tk.StringVar()
+        self.file5100_1_path, self.file5100_2_path = tk.StringVar(), tk.StringVar()
         self.create_widgets()
 
     def create_widgets(self):
-        title_label = tk.Label(self.root, text="Send 文件自动同步更新工具", font=("Microsoft YaHei", 16, "bold"), fg="#2c3e50")
-        title_label.pack(pady=10)
-
-        desc = tk.Label(self.root, text="修复多余列丢失问题，严格执行5100校验拦截", font=("Microsoft YaHei", 10), fg="#7f8c8d")
-        desc.pack(pady=5)
-
+        tk.Label(self.root, text="Send 坐标动态定位与同步工具", font=("Microsoft YaHei", 15, "bold"), fg="#2c3e50").pack(pady=10)
         frame = tk.Frame(self.root)
-        frame.pack(padx=20, pady=10, fill="x")
-
-        self._add_file_row(frame, "1. WRT 映射文件（母体）:", self.wrt_path, self.select_wrt, 0)
-        self._add_file_row(frame, "2. SEND 文件（待更新）:", self.send_path, self.select_send, 1)
-        self._add_file_row(frame, "3. 5100 文件①:", self.file5100_1_path, self.select_5100_1, 2)
-        self._add_file_row(frame, "4. 5100 文件②（可选）:", self.file5100_2_path, self.select_5100_2, 3)
+        frame.pack(padx=20, pady=5, fill="x")
+        self._add_row(frame, "1. WRT 映射文件:", self.wrt_path, self.sel_wrt, 0)
+        self._add_row(frame, "2. SEND 旧文件:", self.send_path, self.sel_send, 1)
+        self._add_row(frame, "3. 最新 5100 文件①:", self.file5100_1_path, self.sel_5100_1, 2)
+        self._add_row(frame, "4. 最新 5100 文件②(可选):", self.file5100_2_path, self.sel_5100_2, 3)
 
         btn_frame = tk.Frame(self.root)
-        btn_frame.pack(pady=15)
+        btn_frame.pack(pady=10)
+        self.run_btn = tk.Button(btn_frame, text="开始同步并计算新坐标", command=self.transform, bg="#e74c3c", fg="white", font=("Microsoft YaHei", 12, "bold"), width=25)
+        self.run_btn.pack(side="left", padx=10)
 
-        self.transform_btn = tk.Button(btn_frame, text="开始变换 / 更新 SEND", command=self.transform, bg="#27ae60", fg="white", font=("Microsoft YaHei", 12, "bold"), width=25, height=2, relief="raised")
-        self.transform_btn.pack(side="left", padx=10)
-
-        self.clear_btn = tk.Button(btn_frame, text="清空日志", command=self.clear_log, bg="#95a5a6", fg="white", font=("Microsoft YaHei", 11), width=12, height=2)
-        self.clear_btn.pack(side="left", padx=10)
-
-        log_label = tk.Label(self.root, text="处理日志：", font=("Microsoft YaHei", 10))
-        log_label.pack(anchor="w", padx=20)
-
-        self.log_text = scrolledtext.ScrolledText(self.root, height=18, width=95, font=("Consolas", 9), bg="#f8f9fa")
+        self.log_text = scrolledtext.ScrolledText(self.root, height=20, width=100, font=("Consolas", 9), bg="#f8f9fa")
         self.log_text.pack(padx=20, pady=5, fill="both", expand=True)
 
-        self.status_var = tk.StringVar(value="就绪 | 请先选择文件，然后点击「开始变换」")
-        status_bar = tk.Label(self.root, textvariable=self.status_var, bd=1, relief="sunken", anchor="w", fg="#34495e")
-        status_bar.pack(side="bottom", fill="x")
+    def _add_row(self, p, txt, var, cmd, r):
+        tk.Label(p, text=txt, width=20, anchor="e").grid(row=r, column=0, pady=5)
+        tk.Entry(p, textvariable=var, width=55).grid(row=r, column=1, padx=5)
+        tk.Button(p, text="浏览...", command=cmd).grid(row=r, column=2)
 
-    def _add_file_row(self, parent, label_text, var, cmd, row):
-        tk.Label(parent, text=label_text, font=("Microsoft YaHei", 10), width=22, anchor="e").grid(row=row, column=0, padx=5, pady=6, sticky="e")
-        entry = tk.Entry(parent, textvariable=var, width=55, font=("Consolas", 9))
-        entry.grid(row=row, column=1, padx=5, pady=6)
-        btn = tk.Button(parent, text="浏览...", command=cmd, width=8, font=("Microsoft YaHei", 9))
-        btn.grid(row=row, column=2, padx=5, pady=6)
-
-    def select_wrt(self): path = filedialog.askopenfilename(title="选择 WRT", filetypes=[("CSV/Excel", "*.csv *.xlsx *.xlsm")]); self.wrt_path.set(path) if path else None
-    def select_send(self): path = filedialog.askopenfilename(title="选择 SEND", filetypes=[("CSV/Excel", "*.csv *.xlsx *.xlsm")]); self.send_path.set(path) if path else None
-    def select_5100_1(self): path = filedialog.askopenfilename(title="选择 5100①", filetypes=[("Excel", "*.xlsx *.xlsm")]); self.file5100_1_path.set(path) if path else None
-    def select_5100_2(self): path = filedialog.askopenfilename(title="选择 5100②", filetypes=[("Excel", "*.xlsx *.xlsm")]); self.file5100_2_path.set(path) if path else None
-
+    def sel_wrt(self): self.wrt_path.set(filedialog.askopenfilename())
+    def sel_send(self): self.send_path.set(filedialog.askopenfilename())
+    def sel_5100_1(self): self.file5100_1_path.set(filedialog.askopenfilename())
+    def sel_5100_2(self): self.file5100_2_path.set(filedialog.askopenfilename())
+    
     def log(self, msg):
         self.log_text.insert(tk.END, f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
         self.log_text.see(tk.END)
         self.root.update_idletasks()
 
-    def clear_log(self):
-        self.log_text.delete("1.0", tk.END)
-
     def transform(self):
         wrt_file, send_file = self.wrt_path.get().strip(), self.send_path.get().strip()
         f5100_1, f5100_2 = self.file5100_1_path.get().strip(), self.file5100_2_path.get().strip()
+        if not wrt_file or not send_file: return messagebox.showerror("错误", "请选择 WRT 和 SEND")
 
-        if not wrt_file or not send_file:
-            messagebox.showerror("错误", "必须选择 WRT 文件 和 SEND 文件！")
-            return
-
-        self.transform_btn.config(state="disabled", text="处理中...")
+        self.run_btn.config(state="disabled", text="处理中...")
         self.log_text.delete("1.0", tk.END)
-        
+
         try:
-            # 1. 读取数据
             df_wrt = read_any_file(wrt_file)
             df_send = read_any_file(send_file)
-            all_sheets = get_all_sheet_names([f5100_1, f5100_2])
+            max_cols = max(len(df_send.columns), 5)
             
-            # 【修复1】：获取原 SEND 的最大列数，确保没有任何一列丢失
-            max_cols = max(len(df_send.columns), 5) 
-            
-            new_data = []
-            c_preserved_count = 0
-            invalid_sheet_count = 0
-
-            # 为了快速在旧 SEND 查找 B 列，建立字典索引
+            # 建立旧 SEND 索引以保留多余列
             send_dict = {}
             for _, row in df_send.iterrows():
                 b_val = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
                 if b_val and b_val not in send_dict:
-                    # 将整行转为 list 存起来，补齐长度
-                    row_list = ["" if pd.isna(x) else str(x) for x in row.tolist()]
-                    if len(row_list) < max_cols:
-                        row_list.extend([""] * (max_cols - len(row_list)))
-                    send_dict[b_val] = row_list
+                    lst = ["" if pd.isna(x) else str(x) for x in row.tolist()]
+                    lst.extend([""] * (max_cols - len(lst)))
+                    send_dict[b_val] = lst
 
-            self.log("开始以 WRT 为母体重建数据并进行 5100 验证...")
-            
-            # 2. 遍历 WRT，严格重组数据
+            # 构建 5100 坐标字典
+            self.log("=== 开始解析 5100 坐标结构 ===")
+            index_5100 = build_5100_index([f5100_1, f5100_2], self.log)
+            self.log("✅ 5100 坐标字典建立完成！\n")
+
+            new_data = []
+            calc_success = 0
+            calc_fail = 0
+
+            self.log("=== 开始根据 WRT 的 A 列计算最新坐标 ===")
             for _, wrt_row in df_wrt.iterrows():
                 wrt_a = str(wrt_row.iloc[0]).strip() if pd.notna(wrt_row.iloc[0]) else ""
                 wrt_b = str(wrt_row.iloc[1]).strip() if pd.notna(wrt_row.iloc[1]) else ""
                 wrt_c = str(wrt_row.iloc[2]).strip() if pd.notna(wrt_row.iloc[2]) else ""
+                if not wrt_b: continue
                 
-                if not wrt_b: continue # 跳过没有 B 列的空行
-                
-                # 初始化新行（默认全是空字符串，长度保证覆盖原SEND所有列）
-                current_row = [""] * max_cols
-                
-                # 如果旧 SEND 里有匹配项，完整继承旧数据（包括F/G/H等所有后续列）
-                if wrt_b in send_dict:
-                    current_row = send_dict[wrt_b].copy()
-                
-                # 更新 A 列和 B 列
-                current_row[0] = wrt_a
-                current_row[1] = wrt_b
-                
-                # 更新 C 列 (如果WRT有值用WRT，否则保留旧的)
-                if wrt_c:
-                    current_row[2] = wrt_c
-                elif current_row[2]:
-                    c_preserved_count += 1
-                
-                # 【修复2】：严格的 Sheet 拦截逻辑
-                target_sheet = parse_a_to_sheet(wrt_a)
-                
-                if target_sheet:
-                    # 如果用户选了 5100 文件，需要验证
-                    if all_sheets:
-                        if target_sheet in all_sheets:
-                            current_row[3] = target_sheet
+                # 继承结构
+                cur_row = send_dict.get(wrt_b, [""] * max_cols).copy()
+                cur_row[0], cur_row[1] = wrt_a, wrt_b
+                if wrt_c: cur_row[2] = wrt_c
+
+                # === 核心：根据 A 列计算 D 和 E ===
+                if len(wrt_a) >= 5 and wrt_a.isdigit():
+                    col_code = str(int(wrt_a[-2:]))  # 最后2位（列代码，如 12）
+                    row_code = wrt_a[-4:-2]          # 中间2位（行代码，如 04）
+                    sheet_num = wrt_a[:-4]           # 剩下的前缀（如 11 或 6）
+                    target_sheet = f"表{sheet_num}"
+                    
+                    if target_sheet in index_5100:
+                        cur_row[3] = target_sheet # 写入 D 列
+                        
+                        r = index_5100[target_sheet]['rows'].get(row_code)
+                        c_letter = index_5100[target_sheet]['cols'].get(col_code)
+                        
+                        if r and c_letter:
+                            # 成功计算出最新坐标！
+                            new_coord = f"{c_letter}{r}"
+                            old_coord = cur_row[4]
+                            cur_row[4] = new_coord
+                            calc_success += 1
                         else:
-                            # 拦截！目标 Sheet 不存在，不修改 D列，也不修改 E列
-                            invalid_sheet_count += 1
-                            self.log(f"⚠️ 拦截: B列[{wrt_b[:15]}] 对应的目标表[{target_sheet}]不存在! 已保留原样。")
+                            calc_fail += 1
+                            self.log(f"⚠️ [警告] A={wrt_a} ({target_sheet}): 找不到 行番号[{row_code}] 或 表头列[({col_code})]，保留了原坐标。")
                     else:
-                        # 没选 5100 文件，直接更新
-                        current_row[3] = target_sheet
+                        calc_fail += 1
+                        self.log(f"🛑 [拦截] A={wrt_a}: 目标表 [{target_sheet}] 在5100文件中不存在！")
                 
-                # 将处理好的一行加入结果
-                new_data.append(current_row)
+                new_data.append(cur_row)
 
-            # 3. 生成输出结果
-            df_new = pd.DataFrame(new_data)
-            
+            # 输出文件
             output_path = os.path.splitext(send_file)[0] + "_updated.csv"
-            df_new.to_csv(output_path, index=False, header=False, encoding='utf-8-sig')
+            pd.DataFrame(new_data).to_csv(output_path, index=False, header=False, encoding='utf-8-sig')
 
-            self.log(f"\n✅ 处理完成！")
-            self.log(f"👉 成功保留了 SEND 原有的 {max_cols} 列结构。")
-            self.log(f"👉 总输出行数：{len(df_new)}")
-            if invalid_sheet_count > 0:
-                self.log(f"🛑 成功拦截了 {invalid_sheet_count} 次无效的 Sheet 更改，相关行的 D/E 坐标未受影响。")
-            self.status_var.set(f"完成 | 已生成 {os.path.basename(output_path)}")
+            self.log(f"\n✅ 全部处理完成！共生成 {len(new_data)} 行。")
+            self.log(f"🎯 成功动态计算并更新坐标 (E列)：{calc_success} 条")
+            self.log(f"保留原有 SEND 结构，文件已保存至：{os.path.basename(output_path)}")
 
         except Exception as e:
-            self.log(f"❌ 错误: {str(e)}")
-            self.status_var.set("错误 | 请查看日志")
+            self.log(f"❌ 发生错误: {str(e)}")
         finally:
-            self.transform_btn.config(state="normal", text="开始变换 / 更新 SEND")
+            self.run_btn.config(state="normal", text="开始同步并计算新坐标")
 
 if __name__ == "__main__":
     root = tk.Tk()
