@@ -32,7 +32,7 @@ def read_any_file(path):
 
 
 def build_5100_index(file_paths, log_callback):
-    """锚点半径扫描：只在“行番号”周边寻找坐标，杜绝抓取远处的错误数据"""
+    """雷达锚点扫描 + 严格的纯净数字过滤"""
     index = {}
     for fpath in file_paths:
         if not fpath or not os.path.exists(fpath):
@@ -41,10 +41,9 @@ def build_5100_index(file_paths, log_callback):
         try:
             wb = load_workbook(fpath, data_only=True)
             for ws in wb.worksheets:
-                # 【修复个位数表过滤 Bug】: 将 05 转为 5，再与白名单比对
                 sheet_num_str = re.sub(r'\D', '', ws.title)
                 if not sheet_num_str: continue
-                clean_num = str(int(sheet_num_str)) 
+                clean_num = str(int(sheet_num_str))
                 if clean_num not in ALLOWED_SHEET_NUMS:
                     continue
 
@@ -60,28 +59,33 @@ def build_5100_index(file_paths, log_callback):
                             if "行番号" in val:
                                 anchors.append(cell)
 
-                # 2. 在核心锚点周边划定半径，提取真实坐标
+                # 2. 在锚点周边提取数据
                 for anchor in anchors:
-                    # A. 找列（表头）：严格锁定在行番号的上方 5 行到下方 2 行之间，向右查找
+                    # A. 提取表头 (1)
                     for r in range(max(1, anchor.row - 5), min(ws.max_row + 1, anchor.row + 3)):
                         for c in range(anchor.column, min(ws.max_column + 1, anchor.column + 150)):
                             cell = ws.cell(row=r, column=c)
                             if cell.value is not None:
                                 v_str = unicodedata.normalize('NFKC', str(cell.value)).strip()
-                                # 兼容 (1), 1, <1>, （1）
                                 m = re.match(r'^[\(（<\[]?\s*(\d+)\s*[\)）>\]]?$', v_str)
                                 if m:
                                     col_num = m.group(1)
                                     if col_num not in index[sheet_name]['cols']:
                                         index[sheet_name]['cols'][col_num] = cell.column_letter
 
-                    # B. 找行（行号）：严格锁定在行番号的正下方，左右极窄走廊
+                    # B. 提取行号 01 (必须使用纯净过滤器，防垃圾数字干扰)
                     for r in range(anchor.row + 1, min(ws.max_row + 1, anchor.row + 200)):
                         digits = []
-                        for c in range(max(1, anchor.column - 2), min(ws.max_column + 1, anchor.column + 4)):
-                            v = str(ws.cell(row=r, column=c).value or "")
-                            for char in v:
-                                if char.isdigit(): digits.append(char)
+                        # 极窄走廊扫描
+                        for c in range(max(1, anchor.column - 1), min(ws.max_column + 1, anchor.column + 4)):
+                            cell = ws.cell(row=r, column=c)
+                            if cell.value is not None:
+                                v_str = unicodedata.normalize('NFKC', str(cell.value)).strip()
+                                # 【最关键的过滤器：绝对只接受数字和冒号】
+                                if re.match(r'^[\d\s:：\.]+$', v_str):
+                                    for char in v_str:
+                                        if char.isdigit():
+                                            digits.append(char)
                         
                         if 2 <= len(digits) <= 4:
                             row_code = "".join(digits[:2])
@@ -89,7 +93,10 @@ def build_5100_index(file_paths, log_callback):
                                 index[sheet_name]['rows'][row_code] = r
 
                 if index[sheet_name]['rows'] or index[sheet_name]['cols']:
-                    log_callback(f"  ✅ 已锁定并解析: {sheet_name} (提取到 {len(index[sheet_name]['rows'])} 行, {len(index[sheet_name]['cols'])} 列)")
+                    log_callback(f"  ✅ {sheet_name}: 提取到 {len(index[sheet_name]['rows'])} 行, {len(index[sheet_name]['cols'])} 列")
+                    if index[sheet_name]['rows']:
+                        sample_r = sorted(list(index[sheet_name]['rows'].keys()))[:6]
+                        log_callback(f"      行号前6个: {sample_r}")
 
             wb.close()
         except Exception as e:
@@ -99,7 +106,6 @@ def build_5100_index(file_paths, log_callback):
 
 def get_smart_sheet_candidates(a_str):
     if len(a_str) < 5: return []
-    # 动态前缀提取：无论 50101 还是 110412，砍掉最后四位坐标码，剩下的绝对是表号
     prefix = a_str[:-4] 
     return [f"表{prefix}", f"表0{prefix}", f"第{prefix}表", f"表{prefix}(2)", f"第{prefix}表(2)"]
 
@@ -110,7 +116,6 @@ def get_row_code(a_str):
 
 
 def get_col_code(a_str):
-    """将 01 转换为 1，去精准匹配表头里的 1 或 (1)"""
     if len(a_str) < 2: return ""
     last_two = a_str[-2:]
     if last_two.startswith('0') and last_two[1].isdigit():
@@ -121,7 +126,7 @@ def get_col_code(a_str):
 class UpdateSendApp:
     def __init__(self, root):
         self.root = root
-        root.title("DafKazei 智能坐标同步工具 v5.0 (雷达锁定纯净版)")
+        root.title("DafKazei 智能坐标同步工具 v6.0 (大满贯终极版)")
         root.geometry("920x720")
 
         self.wrt_path = tk.StringVar()
@@ -146,7 +151,7 @@ class UpdateSendApp:
         btn_frame = tk.Frame(self.root)
         btn_frame.pack(pady=10)
         self.run_btn = tk.Button(btn_frame, text="开始同步并计算新坐标", command=self.transform,
-                                 bg="#27ae60", fg="white", font=("Microsoft YaHei", 12, "bold"), width=26)
+                                 bg="#e74c3c", fg="white", font=("Microsoft YaHei", 12, "bold"), width=26)
         self.run_btn.pack(side="left", padx=10)
 
         self.log_text = scrolledtext.ScrolledText(self.root, height=24, width=110, font=("Consolas", 9), bg="#f8f9fa")
@@ -183,47 +188,50 @@ class UpdateSendApp:
             df_wrt = read_any_file(wrt_file)
             df_send = read_any_file(send_file)
             
-            max_cols = max(len(df_send.columns), 4)
+            # 保障结构：至少要有A, B, C, D, E 五列
+            max_cols = max(len(df_send.columns), 5)
 
+            # 【修复3：使用 A列 做绝对唯一标识】
             send_dict = {}
             for _, row in df_send.iterrows():
-                b_val = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-                if b_val:
+                a_val = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                if a_val:
                     row_list = ["" if pd.isna(x) else str(x) for x in row.tolist()]
                     if len(row_list) < max_cols:
                         row_list += [""] * (max_cols - len(row_list))
-                    send_dict[b_val] = row_list
+                    send_dict[a_val] = row_list
 
-            self.log("=== 开始执行指定范围的锚点扫描 ===")
+            self.log("=== 开始执行高精度数字纯净扫描 ===")
             index_5100 = build_5100_index([f5100_1, f5100_2], self.log)
-            self.log("\n=== 扫描完成，开始精确匹配坐标 ===")
+            self.log("\n=== 扫描完成，开始精确对齐并匹配坐标 ===")
 
             new_data = []
             success_count = 0
-            skip_count = 0
             fail_count = 0
 
             for _, wrt_row in df_wrt.iterrows():
                 a = str(wrt_row.iloc[0]).strip() if pd.notna(wrt_row.iloc[0]) else ""
                 b = str(wrt_row.iloc[1]).strip() if pd.notna(wrt_row.iloc[1]) else ""
+                c = str(wrt_row.iloc[2]).strip() if pd.notna(wrt_row.iloc[2]) else ""
 
-                if not b: continue
+                if not a: continue
 
-                # 无条件继承旧 SEND 整行
-                cur_row = send_dict.get(b, [""] * max_cols).copy()
-                cur_row[0] = a
-                cur_row[1] = b
+                cur_row = send_dict.get(a, [""] * max_cols).copy()
+                
+                # 【修复1和2：完全严格写入指定的列位置，不越界】
+                cur_row[0] = a  # A 列：ID
+                cur_row[1] = b  # B 列：Key
+                cur_row[2] = c  # C 列：从 WRT 继承（比如 AK14）
 
                 if len(a) >= 5 and a.isdigit():
-                    # 动态截取表号（砍掉最后四位）
                     raw_sheet_num = a[:-4]
-                    
                     if raw_sheet_num in ALLOWED_SHEET_NUMS:
                         candidates = get_smart_sheet_candidates(a)
                         target_sheet = next((s for s in candidates if s in index_5100), None)
 
                         if target_sheet:
-                            cur_row[2] = target_sheet
+                            cur_row[3] = target_sheet  # D 列：写入 Sheet 名称 (表xx)
+                            
                             row_code = get_row_code(a)
                             col_code = get_col_code(a)
 
@@ -231,36 +239,27 @@ class UpdateSendApp:
                             actual_col = index_5100[target_sheet]['cols'].get(col_code)
 
                             if actual_row and actual_col:
-                                cur_row[3] = f"{actual_col}{actual_row}"
+                                cur_row[4] = f"{actual_col}{actual_row}"  # E 列：写入新坐标 (XX99)
                                 success_count += 1
                             else:
                                 fail_count += 1
-                                if fail_count <= 15: 
-                                    miss_parts = []
-                                    if not actual_row: miss_parts.append(f"行[{row_code}]")
-                                    if not actual_col: miss_parts.append(f"列[{col_code}]")
-                                    self.log(f"⚠️ A={a}: 表[{target_sheet}] 内缺失 {' 和 '.join(miss_parts)}")
-                        else:
-                            fail_count += 1
-                    else:
-                        skip_count += 1
+                                if fail_count <= 20: 
+                                    self.log(f"⚠️ A={a}: 表[{target_sheet}] 内缺失坐标元素。")
 
                 new_data.append(cur_row)
 
             output_path = os.path.splitext(send_file)[0] + "_updated.csv"
             pd.DataFrame(new_data).to_csv(output_path, index=False, header=False, encoding='utf-8-sig')
 
-            self.log(f"\n✅ 处理完成！")
-            self.log(f"   ▶ 成功更新准确坐标: {success_count} 条")
-            self.log(f"   ▶ 因不在名单跳过保持原样: {skip_count} 条")
-            self.log(f"   ▶ 因缺失坐标保留原样: {fail_count} 条")
+            self.log(f"\n✅ 处理完美完成！")
+            self.log(f"   ▶ 成功对齐并计算坐标: {success_count} 条")
+            self.log(f"   ▶ 因缺失数据未更新: {fail_count} 条")
             self.log(f"文件已保存至: {output_path}")
 
         except Exception as e:
             self.log(f"❌ 发生异常: {str(e)}")
         finally:
             self.run_btn.config(state="normal", text="开始同步并计算新坐标")
-
 
 if __name__ == "__main__":
     root = tk.Tk()
