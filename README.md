@@ -29,12 +29,11 @@ def read_any_file(path):
 
 
 def build_5100_index(file_paths, log_callback):
-    """带高精度日志的全域自适应扫描"""
     index = {}
     for fpath in file_paths:
         if not fpath or not os.path.exists(fpath):
             continue
-        log_callback(f"\n▶ 正在深度扫描: {os.path.basename(fpath)}")
+        log_callback(f"\n▶ 正在精准扫描: {os.path.basename(fpath)}")
         try:
             wb = load_workbook(fpath, data_only=True)
             for ws in wb.worksheets:
@@ -44,7 +43,7 @@ def build_5100_index(file_paths, log_callback):
                 row_anchors = []
                 col_anchors = []
 
-                # 1. 寻找所有的“行番号”和“表头”锚点
+                # 1. 寻找所有的“行番号”和“表头(1)”锚点
                 for row in ws.iter_rows():
                     for cell in row:
                         if cell.value is not None:
@@ -55,36 +54,33 @@ def build_5100_index(file_paths, log_callback):
                             if m:
                                 col_anchors.append((m.group(1), cell))
 
-                # 提取行号映射
-                for anchor_idx, anchor in enumerate(row_anchors):
-                    log_callback(f"  [{sheet_name}] 找到第 {anchor_idx+1} 个行番号锚点: 第 {anchor.row} 行, 第 {anchor.column} 列")
-                    # 往下扫 400 行
-                    for r_idx in range(anchor.row + 1, min(ws.max_row + 1, anchor.row + 400)):
+                # 2. 提取行号映射（极窄走廊扫描法）
+                for anchor in row_anchors:
+                    for r_idx in range(anchor.row + 1, min(ws.max_row + 1, anchor.row + 200)):
                         digits = []
-                        # 在行番号下方附近极其狭窄的区域（左右共20列）吸取碎片的行号
-                        # 注意：范围不能太大，否则会把右侧的金额数字吸进来当成行号！
-                        for c_idx in range(max(1, anchor.column - 2), min(ws.max_column + 1, anchor.column + 18)):
+                        # 【关键修复】扫描宽度收窄！只在行番号正下方及右侧3列内寻找，杜绝吸入右侧金额和表头
+                        for c_idx in range(anchor.column - 1, anchor.column + 4):
                             v = str(ws.cell(row=r_idx, column=c_idx).value or "")
                             for char in v:
                                 if char.isdigit():
                                     digits.append(char)
                         
-                        if len(digits) >= 2:
+                        # 只有当正好吸取到 2~4 个数字时（比如 010），才确认为行号
+                        if len(digits) >= 2 and len(digits) <= 4:
                             row_code = "".join(digits[:2])
                             if row_code not in index[sheet_name]['rows']:
                                 index[sheet_name]['rows'][row_code] = r_idx
 
-                # 提取列号映射
+                # 3. 提取列号映射
                 for num, cell in col_anchors:
                     if num not in index[sheet_name]['cols']:
                         index[sheet_name]['cols'][num] = cell.column_letter
 
-                # 打印该 Sheet 的扫描结果摘要，用于排错
                 if index[sheet_name]['rows'] or index[sheet_name]['cols']:
-                    log_callback(f"  👉 {sheet_name} 总结: 提取到 {len(index[sheet_name]['rows'])} 个行号, {len(index[sheet_name]['cols'])} 个表头列")
+                    log_callback(f"  👉 {sheet_name}: 提取到 {len(index[sheet_name]['rows'])} 个行, {len(index[sheet_name]['cols'])} 个列")
                     if index[sheet_name]['rows']:
-                        sample_r = list(index[sheet_name]['rows'].keys())[:6]
-                        log_callback(f"      行号示例(前6个): {sample_r}")
+                        sample_r = sorted(list(index[sheet_name]['rows'].keys()))[:6]
+                        log_callback(f"      行号前6个: {sample_r}")
 
             wb.close()
         except Exception as e:
@@ -96,10 +92,9 @@ def get_smart_sheet_candidates(a_str):
     candidates = []
     if len(a_str) >= 6:
         prefix = a_str[:2]
-        candidates.extend([f"表{prefix}", f"表0{prefix}", f"第{prefix}表", f"表{prefix}(2)"])
     else:
         prefix = a_str[0]
-        candidates.extend([f"表{prefix}", f"表0{prefix}", f"第{prefix}表", f"表{prefix}(2)"])
+    candidates.extend([f"表{prefix}", f"表0{prefix}", f"第{prefix}表", f"表{prefix}(2)", f"第{prefix}表(2)"])
     return list(dict.fromkeys(candidates))
 
 
@@ -109,6 +104,7 @@ def get_row_code(a_str):
 
 
 def get_col_code(a_str):
+    """完美切合你的思路：将 01 转换为 1，去匹配表头里的 (1)"""
     if len(a_str) < 2: return ""
     last_two = a_str[-2:]
     if last_two.startswith('0') and last_two[1].isdigit():
@@ -119,7 +115,7 @@ def get_col_code(a_str):
 class UpdateSendApp:
     def __init__(self, root):
         self.root = root
-        root.title("DafKazei 智能坐标同步工具 v3.8 (诊断分析版)")
+        root.title("DafKazei 智能坐标同步工具 v3.9 (极窄走廊版)")
         root.geometry("900x700")
 
         self.wrt_path = tk.StringVar()
@@ -190,7 +186,7 @@ class UpdateSendApp:
                         row_list += [""] * (max_cols - len(row_list))
                     send_dict[b_val] = row_list
 
-            self.log("=== 开始执行诊断版扫描 ===")
+            self.log("=== 开始执行精准扫描 ===")
             index_5100 = build_5100_index([f5100_1, f5100_2], self.log)
             self.log("\n=== 扫描完成，开始更新坐标 ===")
 
@@ -228,16 +224,14 @@ class UpdateSendApp:
                             success_count += 1
                         else:
                             fail_count += 1
-                            if fail_count <= 40: # 打印前40条失败记录
+                            if fail_count <= 20: 
                                 miss_parts = []
                                 if not actual_row: miss_parts.append(f"行号[{row_code}]")
                                 if not actual_col: miss_parts.append(f"列号[({col_code})]")
                                 miss_str = " 和 ".join(miss_parts)
-                                self.log(f"⚠️ A={a}: 表[{target_sheet}] 找到了，但该表内缺失 {miss_str}")
+                                self.log(f"⚠️ A={a}: 表[{target_sheet}] 内缺失 {miss_str}")
                     else:
                         fail_count += 1
-                        if fail_count <= 40:
-                            self.log(f"🛑 A={a}: 无法匹配到 Sheet，已尝试候选名称: {candidates}")
 
                 new_data.append(cur_row)
 
