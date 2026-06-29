@@ -54,18 +54,20 @@ def build_5100_index(file_paths, log_callback):
                             if m:
                                 col_anchors.append((m.group(1), cell))
 
-                # 2. 提取行号映射（极窄走廊扫描法）
+                # 2. 提取行号映射（极窄走廊扫描法 + 防越界撞墙保护）
                 for anchor in row_anchors:
                     for r_idx in range(anchor.row + 1, min(ws.max_row + 1, anchor.row + 200)):
                         digits = []
-                        # 【关键修复】扫描宽度收窄！只在行番号正下方及右侧3列内寻找，杜绝吸入右侧金额和表头
-                        for c_idx in range(anchor.column - 1, anchor.column + 4):
+                        # 【关键修复】加上 max(1, ...) 防止越界崩溃！
+                        start_col = max(1, anchor.column - 2)
+                        end_col = min(ws.max_column + 1, anchor.column + 4)
+                        
+                        for c_idx in range(start_col, end_col):
                             v = str(ws.cell(row=r_idx, column=c_idx).value or "")
                             for char in v:
                                 if char.isdigit():
                                     digits.append(char)
                         
-                        # 只有当正好吸取到 2~4 个数字时（比如 010），才确认为行号
                         if len(digits) >= 2 and len(digits) <= 4:
                             row_code = "".join(digits[:2])
                             if row_code not in index[sheet_name]['rows']:
@@ -104,7 +106,6 @@ def get_row_code(a_str):
 
 
 def get_col_code(a_str):
-    """完美切合你的思路：将 01 转换为 1，去匹配表头里的 (1)"""
     if len(a_str) < 2: return ""
     last_two = a_str[-2:]
     if last_two.startswith('0') and last_two[1].isdigit():
@@ -115,7 +116,7 @@ def get_col_code(a_str):
 class UpdateSendApp:
     def __init__(self, root):
         self.root = root
-        root.title("DafKazei 智能坐标同步工具 v3.9 (极窄走廊版)")
+        root.title("DafKazei 智能坐标同步工具 v3.10 (防撞墙终极版)")
         root.geometry("900x700")
 
         self.wrt_path = tk.StringVar()
