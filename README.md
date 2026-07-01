@@ -1,274 +1,186 @@
-可以。最实用的做法是：先批量导出 VBA → 再生成 Mermaid 思维导图/流程图。 Excel/VBE 里的 Export 方法本来就支持把 VBA 组件导成单独文件，比如 .bas、.cls、.frm。微软文档也说明 Export 是把组件保存成单独文件的方法。 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-1. 手动导出 VBA
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+import pandas as pd
+import os
+from datetime import datetime
 
-适合模块不多的时候：
+def read_any_file(path):
+    if not path or not os.path.exists(path):
+        return None
+    ext = os.path.splitext(path)[1].lower()
+    if ext == '.csv':
+        for enc in ['utf-8-sig', 'cp932', 'shift_jis', 'gbk', 'utf-8']:
+            try:
+                df = pd.read_csv(path, header=None, encoding=enc, dtype=str, low_memory=False)
+                if not df.empty:
+                    return df
+            except Exception:
+                continue
+        return pd.read_csv(path, header=None, dtype=str, low_memory=False)
+    else:
+        return pd.read_excel(path, header=None, dtype=str)
 
-1. 打开 Excel 文件
-2. 按 Alt + F11 打开 VBA 编辑器
-3. 左侧找到模块，比如 Module1、Sheet1、ThisWorkbook
-4. 右键 → Export File... / ファイルのエクスポート
-5. 导出后会得到类似：
+class CompareSendApp:
+    def __init__(self, root):
+        self.root = root
+        root.title("DafKazei Send 差异对比剔除工具 v3.0 (保护新增列版)")
+        root.geometry("850x600")
 
-Module1.bas
-Class1.cls
-UserForm1.frm
-UserForm1.frx
+        self.send1_path = tk.StringVar()
+        self.send2_path = tk.StringVar()
+        self.target_sheet = tk.StringVar(value="表11")  # 默认表名
+        self.protect_col = tk.StringVar(value="36")     # 默认受保护的列号(A列最后两位)
 
-如果代码很多，一个个导出很麻烦，就用下面的批量导出宏。
+        self.create_widgets()
 
-⸻
+    def create_widgets(self):
+        tk.Label(self.root, text="Send 差异对比剔除工具", font=("Microsoft YaHei", 16, "bold"), fg="#2980b9").pack(pady=10)
+        tk.Label(self.root, text="逻辑：在指定表内，对比 A 列。若输入保护列号(如36)，则 Send2 中结尾为36的编号无条件保留。", fg="#7f8c8d").pack(pady=2)
 
-2. 批量导出 VBA，并自动生成一个简单思维导图
+        frame = tk.Frame(self.root)
+        frame.pack(padx=20, pady=10, fill="x")
 
-先做一个副本，别直接动原文件。
+        # 1. Send 1 选择
+        tk.Label(frame, text="1. Send 1 (寄存/现有):", width=22, anchor="e").grid(row=0, column=0, pady=8)
+        tk.Entry(frame, textvariable=self.send1_path, width=55).grid(row=0, column=1, padx=5)
+        tk.Button(frame, text="浏览...", command=self.sel_send1).grid(row=0, column=2)
 
-然后在 Excel 里：
+        # 2. Send 2 选择
+        tk.Label(frame, text="2. Send 2 (新规/待过滤):", width=22, anchor="e").grid(row=1, column=0, pady=8)
+        tk.Entry(frame, textvariable=self.send2_path, width=55).grid(row=1, column=1, padx=5)
+        tk.Button(frame, text="浏览...", command=self.sel_send2).grid(row=1, column=2)
 
-文件 → 选项 → 信任中心 → 信任中心设置 → 宏设置
+        # 3. 指定表名
+        tk.Label(frame, text="3. 目标工作表 (如: 表11):", width=22, anchor="e", fg="#c0392b", font=("Microsoft YaHei", 10, "bold")).grid(row=2, column=0, pady=8)
+        tk.Entry(frame, textvariable=self.target_sheet, width=20, font=("Microsoft YaHei", 10, "bold")).grid(row=2, column=1, sticky="w", padx=5)
 
-勾选：
+        # 4. 新增列保护 (A列最后两位)
+        tk.Label(frame, text="4. 保护新增列号 (A列末两位):", width=24, anchor="e", fg="#27ae60", font=("Microsoft YaHei", 10, "bold")).grid(row=3, column=0, pady=8)
+        tk.Entry(frame, textvariable=self.protect_col, width=20, font=("Microsoft YaHei", 10, "bold")).grid(row=3, column=1, sticky="w", padx=5)
+        tk.Label(frame, text="例如输入 36，则 112136 会被保留", fg="#7f8c8d").grid(row=3, column=1, padx=180, sticky="w")
 
-信任对 VBA 项目对象模型的访问
-Trust access to the VBA project object model
+        # 按钮区域
+        btn_frame = tk.Frame(self.root)
+        btn_frame.pack(pady=10)
+        self.run_btn = tk.Button(btn_frame, text="开始对比并剔除", command=self.process_files,
+                                 bg="#e74c3c", fg="white", font=("Microsoft YaHei", 12, "bold"), width=25)
+        self.run_btn.pack()
 
-这个设置是为了让宏可以读取 VBA 工程对象。微软也提醒，这个选项有安全风险，建议只在需要访问 VBA 工程对象时临时开启，用完再关掉。 
+        # 日志区域
+        self.log_text = scrolledtext.ScrolledText(self.root, height=15, width=100, font=("Consolas", 9), bg="#f8f9fa")
+        self.log_text.pack(padx=20, pady=10, fill="both", expand=True)
 
-然后新建一个模块，把下面代码贴进去运行。
+    def sel_send1(self): self.send1_path.set(filedialog.askopenfilename(title="选择 Send 1 文件"))
+    def sel_send2(self): self.send2_path.set(filedialog.askopenfilename(title="选择 Send 2 文件"))
 
-Option Explicit
-Public Sub ExportVBAAndMakeMindMap()
-    Dim wb As Workbook
-    Set wb = ActiveWorkbook
-    If wb Is Nothing Then
-        MsgBox "没有找到当前工作簿。", vbExclamation
-        Exit Sub
-    End If
-    If Len(wb.Path) = 0 Then
-        MsgBox "请先保存这个 Excel 文件，再执行导出。", vbExclamation
-        Exit Sub
-    End If
-    Dim folder As String
-    folder = wb.Path & "\vba_export_" & Format(Now, "yyyymmdd_hhnnss")
-    MkDir folder
-    Dim comp As Object
-    Dim codeAll As String
-    Dim mind As String
-    mind = "# VBA Mind Map" & vbCrLf & vbCrLf
-    mind = mind & "```mermaid" & vbCrLf
-    mind = mind & "mindmap" & vbCrLf
-    mind = mind & "  root((VBA_Project))" & vbCrLf
-    For Each comp In wb.VBProject.VBComponents
-        Dim ext As String
-        ext = ExtByType(comp.Type)
-        If Len(ext) > 0 Then
-            On Error Resume Next
-            comp.Export folder & "\" & SafeFileName(comp.Name) & ext
-            If Err.Number <> 0 Then
-                codeAll = codeAll & "### Export failed: " & comp.Name & " / " & Err.Description & vbCrLf
-                Err.Clear
-            End If
-            On Error GoTo 0
-        End If
-        mind = mind & "    " & MermaidText(comp.Name) & vbCrLf
-        Dim cm As Object
-        Set cm = comp.CodeModule
-        Dim total As Long
-        total = cm.CountOfLines
-        If total > 0 Then
-            codeAll = codeAll & vbCrLf
-            codeAll = codeAll & "========== " & comp.Name & " ==========" & vbCrLf
-            codeAll = codeAll & cm.Lines(1, total) & vbCrLf
-            Dim lineNo As Long
-            lineNo = 1
-            Do While lineNo <= total
-                Dim procName As String
-                Dim kind As Long
-                procName = ""
-                On Error Resume Next
-                procName = cm.ProcOfLine(lineNo, kind)
-                On Error GoTo 0
-                If Len(procName) > 0 Then
-                    Dim startLine As Long
-                    Dim countLines As Long
-                    startLine = cm.ProcStartLine(procName, kind)
-                    countLines = cm.ProcCountLines(procName, kind)
-                    mind = mind & "      " & MermaidText(procName) & vbCrLf
-                    If countLines > 0 Then
-                        lineNo = startLine + countLines
-                    Else
-                        lineNo = lineNo + 1
-                    End If
-                Else
-                    lineNo = lineNo + 1
-                End If
-            Loop
-        End If
-    Next comp
-    mind = mind & "```" & vbCrLf
-    WriteUtf8 folder & "\AllVBA.txt", codeAll
-    WriteUtf8 folder & "\VBA_MindMap.md", mind
-    MsgBox "导出完成：" & vbCrLf & folder, vbInformation
-End Sub
-Private Function ExtByType(ByVal t As Long) As String
-    Select Case t
-        Case 1
-            ExtByType = ".bas"   ' 标准模块
-        Case 2
-            ExtByType = ".cls"   ' 类模块
-        Case 3
-            ExtByType = ".frm"   ' UserForm
-        Case 100
-            ExtByType = ".cls"   ' Sheet / ThisWorkbook
-        Case Else
-            ExtByType = ".txt"
-    End Select
-End Function
-Private Function SafeFileName(ByVal s As String) As String
-    Dim bad As Variant
-    Dim i As Long
-    bad = Array("\", "/", ":", "*", "?", """", "<", ">", "|")
-    For i = LBound(bad) To UBound(bad)
-        s = Replace(s, bad(i), "_")
-    Next i
-    SafeFileName = s
-End Function
-Private Function MermaidText(ByVal s As String) As String
-    s = SafeFileName(s)
-    s = Replace(s, " ", "_")
-    s = Replace(s, ".", "_")
-    s = Replace(s, "(", "_")
-    s = Replace(s, ")", "_")
-    s = Replace(s, "-", "_")
-    MermaidText = s
-End Function
-Private Sub WriteUtf8(ByVal filePath As String, ByVal text As String)
-    Dim st As Object
-    Set st = CreateObject("ADODB.Stream")
-    With st
-        .Type = 2
-        .Charset = "utf-8"
-        .Open
-        .WriteText text
-        .SaveToFile filePath, 2
-        .Close
-    End With
-End Sub
+    def log(self, msg):
+        self.log_text.insert(tk.END, f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+        self.log_text.see(tk.END)
+        self.root.update_idletasks()
 
-执行后，会在 Excel 文件同目录生成一个文件夹，比如：
+    def process_files(self):
+        file1 = self.send1_path.get().strip()
+        file2 = self.send2_path.get().strip()
+        target = self.target_sheet.get().strip()
+        protect_val = self.protect_col.get().strip()
 
-vba_export_20260630_203012
+        # 将保护列号格式化为两位数 (比如输入 6 变成 "06", 输入 36 还是 "36")
+        if protect_val.isdigit():
+            protect_val = protect_val.zfill(2)
 
-里面会有：
+        if not file1 or not file2:
+            return messagebox.showerror("错误", "请同时选择 Send 1 和 Send 2 文件！")
+        if not target:
+            return messagebox.showerror("错误", "请填写目标表名（例如：表11）！")
 
-Module1.bas
-Sheet1.cls
-ThisWorkbook.cls
-UserForm1.frm
-AllVBA.txt
-VBA_MindMap.md
+        self.run_btn.config(state="disabled", text="处理中...")
+        self.log_text.delete("1.0", tk.END)
 
-其中：
+        try:
+            self.log("正在加载 Send 1 和 Send 2 文件...")
+            df_send1 = read_any_file(file1)
+            df_send2 = read_any_file(file2)
 
-AllVBA.txt
+            if df_send1 is None or df_send2 is None:
+                raise ValueError("文件读取失败或内容为空。")
 
-是所有 VBA 代码合并后的文本。
+            # 1. 提取 Send 1 的 A 列集合 (清理潜在的小数点)
+            self.log("正在提取 Send 1 (寄存) 的 A 列数据字典...")
+            send1_a_set = set(str(x).strip().split('.')[0] for x in df_send1[0] if pd.notna(x))
+            self.log(f"Send 1 共提取到 {len(send1_a_set)} 个唯一 A 列编号。")
 
-VBA_MindMap.md
+            # 2. 遍历 Send 2，进行精准过滤
+            self.log(f"\n开始检查 Send 2，锁定表单: 【{target}】")
+            if protect_val:
+                self.log(f"🛡️ 开启新增列保护: A列最后两位为 【{protect_val}】 的数据将无条件保留！")
+            
+            new_data = []
+            kept_count = 0
+            protected_count = 0
+            deleted_count = 0
+            skipped_count = 0
 
-是自动生成的 Mermaid 思维导图文本。Mermaid 的 mindmap 语法本身就是靠缩进表达层级关系，适合这种“模块 → 过程/函数”的结构。 
+            for idx, row in df_send2.iterrows():
+                # 【修复核心：完全不去加空字符串补齐列，保持原汁原味】
+                row_list = ["" if pd.isna(x) else str(x) for x in row.tolist()]
+                a_val = row_list[0].strip().split('.')[0] if len(row_list) > 0 else ""
 
-⸻
+                # 判断当前行是否属于用户指定的目标表
+                is_target_sheet = False
+                if len(row_list) > 3 and target in str(row_list[3]).strip():
+                    is_target_sheet = True
 
-3. 生成的思维导图大概长这样
+                # 双重保险：通过 A 列前缀解析
+                if not is_target_sheet and len(a_val) >= 5 and a_val.isdigit():
+                    prefix = a_val[:-4]
+                    if target == f"表{prefix}" or target == f"表0{prefix}":
+                        is_target_sheet = True
 
-VBA_MindMap.md 里面会类似：
+                # ================= 业务逻辑：判定生死 =================
+                if is_target_sheet:
+                    # 场景 1: Send 1 里有，正常保留
+                    if a_val in send1_a_set:
+                        new_data.append(row_list)
+                        kept_count += 1
+                        
+                    # 场景 2: Send 1 里没有，但它属于受保护的“新增列”！
+                    elif protect_val and len(a_val) >= 2 and a_val[-2:] == protect_val:
+                        new_data.append(row_list)
+                        protected_count += 1
+                        if protected_count <= 10:
+                            self.log(f"🛡️ 成功保护新增列数据: A={a_val}")
+                            
+                    # 场景 3: Send 1 里没有，也不是新增列 -> 干掉它！
+                    else:
+                        deleted_count += 1
+                        if deleted_count <= 10:
+                            self.log(f"✂️ 剔除数据: A={a_val} (Send 1中无此数据)")
+                else:
+                    # 不是目标表，无条件保留，绝对不动原数据
+                    new_data.append(row_list)
+                    skipped_count += 1
 
-mindmap
-  root((VBA_Project))
-    Module1
-      Main
-      ReadData
-      CheckInput
-      OutputResult
-    Sheet1
-      Worksheet_Change
-      CommandButton1_Click
-    ThisWorkbook
-      Workbook_Open
+            # 4. 输出过滤后的文件
+            output_path = os.path.splitext(file2)[0] + f"_Filtered_{target}.csv"
+            pd.DataFrame(new_data).to_csv(output_path, index=False, header=False, encoding='utf-8-sig')
 
-你可以把这段 Mermaid 复制到支持 Mermaid 的 Markdown 工具里预览。Mermaid 也支持流程图，流程图是用节点和箭头表达关系，适合画“哪个函数调用哪个函数”。 
+            self.log("\n================ 处理完成 ================")
+            self.log(f"✅ 目标范围【{target}】内的对比结果：")
+            self.log(f"   ▶ 匹配成功并保留: {kept_count} 条")
+            self.log(f"   ▶ 触发保护机制强制保留: {protected_count} 条")
+            self.log(f"   ▶ 未匹配并被剔除: {deleted_count} 条")
+            self.log(f"   ▶ 非目标表，跳过并保留: {skipped_count} 条")
+            self.log(f"\n💾 剔除后的 Send 2 新文件已保存至:\n   {output_path}")
 
-⸻
+        except Exception as e:
+            self.log(f"❌ 发生异常: {str(e)}")
+        finally:
+            self.run_btn.config(state="normal", text="开始对比并剔除")
 
-4. 如果想生成“真正能看懂业务逻辑”的思维导图
-
-上面那个宏只能做到：
-
-模块名
-  └─ Sub / Function 名
-
-也就是结构图。
-
-如果你的 VBA 很复杂，想看懂真正逻辑，建议把导出的 AllVBA.txt 或几个 .bas/.cls 文件发给 AI，然后让它生成：
-
-入口宏
-调用关系
-主要业务流程
-错误处理流程
-画面事件流程
-Mermaid 思维导图
-Mermaid flowchart 流程图
-
-可以直接用这个提示词：
-
-下面是一个 Excel VBA 项目的代码，请帮我分析并生成文档。
-要求：
-1. 找出所有入口，例如 Workbook_Open、Worksheet_Change、按钮_Click、Main、Auto_Open。
-2. 按模块说明每个模块的职责。
-3. 列出主要 Sub / Function 的作用。
-4. 分析调用关系，说明哪个过程调用哪个过程。
-5. 输出 Mermaid mindmap，用于思维导图。
-6. 输出 Mermaid flowchart TD，用于流程图。
-7. 不要只列函数名，要把业务逻辑也总结出来。
-8. 如果代码太长，请先从整体结构开始，再逐模块分析。
-下面是代码：
-
-然后把 AllVBA.txt 内容贴进去。
-
-⸻
-
-5. 重点看这些入口
-
-复杂 VBA 一般不是从一个地方开始跑的，尤其 Excel 里经常有事件触发。你生成思维导图时，重点找这些：
-
-Workbook_Open()
-Auto_Open()
-Worksheet_Change()
-Worksheet_SelectionChange()
-Worksheet_BeforeDoubleClick()
-CommandButton1_Click()
-UserForm_Initialize()
-UserForm_QueryClose()
-Sub Main()
-
-这些通常就是“业务流程的入口”。
-
-⸻
-
-6. 我建议你的实际操作顺序
-
-最稳的是这样：
-
-① 复制一份 Excel 文件
-② 打开副本
-③ 开启 Trust access to VBA project object model
-④ 运行上面的导出宏
-⑤ 得到 AllVBA.txt 和 VBA_MindMap.md
-⑥ 把 AllVBA.txt 分模块交给 AI 分析
-⑦ 让 AI 输出 Mermaid mindmap / flowchart
-⑧ 用 Mermaid 预览工具查看图
-⑨ 用完后关闭 Trust access 设置
-
-如果只是想快速看结构，用上面的宏就够了。
-如果想真正理解复杂 VBA 的业务流程，需要再做“调用关系分析”和“入口事件分析”。
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = CompareSendApp(root)
+    root.mainloop()
