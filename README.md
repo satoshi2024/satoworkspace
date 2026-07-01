@@ -26,41 +26,41 @@ def read_any_file(path):
 class CompareSendApp:
     def __init__(self, root):
         self.root = root
-        root.title("DafKazei Send 差异对比剔除工具 v3.0 (保护新增列版)")
-        root.geometry("850x600")
+        root.title("DafKazei Send 差异对比剔除工具 v4.0 (动态移位保护版)")
+        root.geometry("860x600")
 
         self.send1_path = tk.StringVar()
         self.send2_path = tk.StringVar()
         self.target_sheet = tk.StringVar(value="表11")  # 默认表名
-        self.protect_col = tk.StringVar(value="36")     # 默认受保护的列号(A列最后两位)
+        self.protect_col = tk.StringVar(value="36")     # 保护的起始列号
 
         self.create_widgets()
 
     def create_widgets(self):
         tk.Label(self.root, text="Send 差异对比剔除工具", font=("Microsoft YaHei", 16, "bold"), fg="#2980b9").pack(pady=10)
-        tk.Label(self.root, text="逻辑：在指定表内，对比 A 列。若输入保护列号(如36)，则 Send2 中结尾为36的编号无条件保留。", fg="#7f8c8d").pack(pady=2)
+        tk.Label(self.root, text="逻辑：比对 A 列。若输入起始保护列(如36)，则 36 及以后的移位列统统无条件保留。", fg="#7f8c8d").pack(pady=2)
 
         frame = tk.Frame(self.root)
         frame.pack(padx=20, pady=10, fill="x")
 
         # 1. Send 1 选择
-        tk.Label(frame, text="1. Send 1 (寄存/现有):", width=22, anchor="e").grid(row=0, column=0, pady=8)
-        tk.Entry(frame, textvariable=self.send1_path, width=55).grid(row=0, column=1, padx=5)
+        tk.Label(frame, text="1. Send 1 (寄存/现有):", width=24, anchor="e").grid(row=0, column=0, pady=8)
+        tk.Entry(frame, textvariable=self.send1_path, width=53).grid(row=0, column=1, padx=5)
         tk.Button(frame, text="浏览...", command=self.sel_send1).grid(row=0, column=2)
 
         # 2. Send 2 选择
-        tk.Label(frame, text="2. Send 2 (新规/待过滤):", width=22, anchor="e").grid(row=1, column=0, pady=8)
-        tk.Entry(frame, textvariable=self.send2_path, width=55).grid(row=1, column=1, padx=5)
+        tk.Label(frame, text="2. Send 2 (新规/待过滤):", width=24, anchor="e").grid(row=1, column=0, pady=8)
+        tk.Entry(frame, textvariable=self.send2_path, width=53).grid(row=1, column=1, padx=5)
         tk.Button(frame, text="浏览...", command=self.sel_send2).grid(row=1, column=2)
 
         # 3. 指定表名
-        tk.Label(frame, text="3. 目标工作表 (如: 表11):", width=22, anchor="e", fg="#c0392b", font=("Microsoft YaHei", 10, "bold")).grid(row=2, column=0, pady=8)
+        tk.Label(frame, text="3. 目标工作表 (如: 表11):", width=24, anchor="e", fg="#c0392b", font=("Microsoft YaHei", 10, "bold")).grid(row=2, column=0, pady=8)
         tk.Entry(frame, textvariable=self.target_sheet, width=20, font=("Microsoft YaHei", 10, "bold")).grid(row=2, column=1, sticky="w", padx=5)
 
-        # 4. 新增列保护 (A列最后两位)
-        tk.Label(frame, text="4. 保护新增列号 (A列末两位):", width=24, anchor="e", fg="#27ae60", font=("Microsoft YaHei", 10, "bold")).grid(row=3, column=0, pady=8)
+        # 4. 新增列保护 (边界 >= 机制)
+        tk.Label(frame, text="4. 保护起始列号 (A列末两位):", width=26, anchor="e", fg="#27ae60", font=("Microsoft YaHei", 10, "bold")).grid(row=3, column=0, pady=8)
         tk.Entry(frame, textvariable=self.protect_col, width=20, font=("Microsoft YaHei", 10, "bold")).grid(row=3, column=1, sticky="w", padx=5)
-        tk.Label(frame, text="例如输入 36，则 112136 会被保留", fg="#7f8c8d").grid(row=3, column=1, padx=180, sticky="w")
+        tk.Label(frame, text="输入 36，则 >=36 (36,37,38...) 的列全保留", fg="#7f8c8d").grid(row=3, column=1, padx=180, sticky="w")
 
         # 按钮区域
         btn_frame = tk.Frame(self.root)
@@ -85,11 +85,12 @@ class CompareSendApp:
         file1 = self.send1_path.get().strip()
         file2 = self.send2_path.get().strip()
         target = self.target_sheet.get().strip()
-        protect_val = self.protect_col.get().strip()
+        protect_val_str = self.protect_col.get().strip()
 
-        # 将保护列号格式化为两位数 (比如输入 6 变成 "06", 输入 36 还是 "36")
-        if protect_val.isdigit():
-            protect_val = protect_val.zfill(2)
+        # 将用户输入的起始保护列号转为数字，方便做 >= 比较
+        protect_threshold = None
+        if protect_val_str.isdigit():
+            protect_threshold = int(protect_val_str)
 
         if not file1 or not file2:
             return messagebox.showerror("错误", "请同时选择 Send 1 和 Send 2 文件！")
@@ -107,15 +108,15 @@ class CompareSendApp:
             if df_send1 is None or df_send2 is None:
                 raise ValueError("文件读取失败或内容为空。")
 
-            # 1. 提取 Send 1 的 A 列集合 (清理潜在的小数点)
+            # 1. 提取 Send 1 的 A 列集合
             self.log("正在提取 Send 1 (寄存) 的 A 列数据字典...")
             send1_a_set = set(str(x).strip().split('.')[0] for x in df_send1[0] if pd.notna(x))
             self.log(f"Send 1 共提取到 {len(send1_a_set)} 个唯一 A 列编号。")
 
             # 2. 遍历 Send 2，进行精准过滤
             self.log(f"\n开始检查 Send 2，锁定表单: 【{target}】")
-            if protect_val:
-                self.log(f"🛡️ 开启新增列保护: A列最后两位为 【{protect_val}】 的数据将无条件保留！")
+            if protect_threshold is not None:
+                self.log(f"🛡️ 开启移位保护: A列最后两位 >= 【{protect_threshold}】 的数据将全员保留！")
             
             new_data = []
             kept_count = 0
@@ -124,7 +125,6 @@ class CompareSendApp:
             skipped_count = 0
 
             for idx, row in df_send2.iterrows():
-                # 【修复核心：完全不去加空字符串补齐列，保持原汁原味】
                 row_list = ["" if pd.isna(x) else str(x) for x in row.tolist()]
                 a_val = row_list[0].strip().split('.')[0] if len(row_list) > 0 else ""
 
@@ -146,20 +146,23 @@ class CompareSendApp:
                         new_data.append(row_list)
                         kept_count += 1
                         
-                    # 场景 2: Send 1 里没有，但它属于受保护的“新增列”！
-                    elif protect_val and len(a_val) >= 2 and a_val[-2:] == protect_val:
-                        new_data.append(row_list)
-                        protected_count += 1
-                        if protected_count <= 10:
-                            self.log(f"🛡️ 成功保护新增列数据: A={a_val}")
-                            
-                    # 场景 3: Send 1 里没有，也不是新增列 -> 干掉它！
+                    # 场景 2: Send 1 里没有，但它大于等于保护阈值，说明是新增或移位公式列！ -> 霸道保留！
+                    elif protect_threshold is not None and len(a_val) >= 2 and a_val[-2:].isdigit():
+                        current_col_num = int(a_val[-2:])
+                        if current_col_num >= protect_threshold:
+                            new_data.append(row_list)
+                            protected_count += 1
+                            if protected_count <= 15:
+                                self.log(f"🛡️ 成功保护新增/移位列数据: A={a_val} (列号 {current_col_num} >= {protect_threshold})")
+                        else:
+                            # 场景 3: Send 1 里没有，且它在新增列的前面 -> 坚决干掉！
+                            deleted_count += 1
+                            if deleted_count <= 15:
+                                self.log(f"✂️ 剔除数据: A={a_val} (列号 {current_col_num} < {protect_threshold})")
                     else:
                         deleted_count += 1
-                        if deleted_count <= 10:
-                            self.log(f"✂️ 剔除数据: A={a_val} (Send 1中无此数据)")
                 else:
-                    # 不是目标表，无条件保留，绝对不动原数据
+                    # 不是目标表，无条件保留
                     new_data.append(row_list)
                     skipped_count += 1
 
@@ -170,7 +173,7 @@ class CompareSendApp:
             self.log("\n================ 处理完成 ================")
             self.log(f"✅ 目标范围【{target}】内的对比结果：")
             self.log(f"   ▶ 匹配成功并保留: {kept_count} 条")
-            self.log(f"   ▶ 触发保护机制强制保留: {protected_count} 条")
+            self.log(f"   ▶ 触发边界保护 (>= {protect_threshold}) 强制保留: {protected_count} 条")
             self.log(f"   ▶ 未匹配并被剔除: {deleted_count} 条")
             self.log(f"   ▶ 非目标表，跳过并保留: {skipped_count} 条")
             self.log(f"\n💾 剔除后的 Send 2 新文件已保存至:\n   {output_path}")
