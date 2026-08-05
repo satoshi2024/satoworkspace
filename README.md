@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import traceback
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,7 +11,7 @@ import pythoncom
 import win32com.client
 
 
-APP_TITLE = "Excel 指定文字变色工具（修正版）"
+APP_TITLE = "Excel 指定文字变色工具（直接修改原文件）"
 SUPPORTED_EXTENSIONS = {".xlsx", ".xlsm", ".xls", ".xlsb"}
 
 # Excel Range.Characters 的 COM 编号
@@ -23,11 +22,11 @@ def rgb_to_excel_color(
     rgb: tuple[int, int, int],
 ) -> int:
     """
-    将普通 RGB 转换为 Excel Font.Color 使用的整数。
+    将普通 RGB 转换成 Excel Font.Color 使用的整数。
     """
     red, green, blue = rgb
 
-    return int(
+    return (
         red
         + green * 256
         + blue * 65536
@@ -53,19 +52,19 @@ def parse_ranges(
         .replace(";", ",")
     )
 
-    result = [
+    ranges = [
         item.strip()
         for item in text.split(",")
         if item.strip()
     ]
 
-    if not result:
+    if not ranges:
         raise ValueError(
             "请输入单元格或范围，"
             "例如 BG7 或 BG7:BG28。"
         )
 
-    return result
+    return ranges
 
 
 def find_positions(
@@ -74,20 +73,26 @@ def find_positions(
     case_sensitive: bool,
 ) -> list[int]:
     """
-    查找关键词出现的所有位置。
+    查找关键词在单元格文字中的所有起始位置。
 
-    返回 Python 的 0 开始索引。
+    返回的位置从 0 开始。
     """
-    if not case_sensitive:
-        source = source.casefold()
-        keyword = keyword.casefold()
+    if not keyword:
+        return []
+
+    if case_sensitive:
+        search_source = source
+        search_keyword = keyword
+    else:
+        search_source = source.casefold()
+        search_keyword = keyword.casefold()
 
     positions: list[int] = []
     start = 0
 
     while True:
-        index = source.find(
-            keyword,
+        index = search_source.find(
+            search_keyword,
             start,
         )
 
@@ -96,8 +101,10 @@ def find_positions(
 
         positions.append(index)
 
-        # 不处理重叠匹配
-        start = index + len(keyword)
+        start = (
+            index
+            + len(search_keyword)
+        )
 
     return positions
 
@@ -106,7 +113,7 @@ def get_anchor_cell(
     cell,
 ):
     """
-    如果是合并单元格，返回合并区域左上角单元格。
+    如果是合并单元格，只处理合并区域左上角单元格。
     """
     try:
         if bool(cell.MergeCells):
@@ -114,6 +121,7 @@ def get_anchor_cell(
                 1,
                 1,
             )
+
     except Exception:
         pass
 
@@ -124,9 +132,9 @@ def get_cell_text(
     cell,
 ) -> str | None:
     """
-    从 Excel 单元格读取文字。
+    读取单元格中的文字。
     """
-    for name in (
+    for attribute_name in (
         "Value2",
         "Value",
         "Text",
@@ -134,8 +142,9 @@ def get_cell_text(
         try:
             value = getattr(
                 cell,
-                name,
+                attribute_name,
             )
+
         except Exception:
             continue
 
@@ -148,10 +157,14 @@ def get_cell_text(
 def get_cell_address(
     cell,
 ) -> str:
+    """
+    获取单元格地址。
+    """
     try:
         return str(
             cell.Address
         )
+
     except Exception:
         return "(未知地址)"
 
@@ -162,12 +175,14 @@ def is_formula_cell(
     """
     判断是否为公式单元格。
 
-    Excel 公式结果通常不能保存局部富文本格式。
+    公式单元格的计算结果不能稳定保存局部字体格式，
+    因此程序会跳过。
     """
     try:
         return bool(
             cell.HasFormula
         )
+
     except Exception:
         return False
 
@@ -178,23 +193,14 @@ def get_characters(
     length: int,
 ):
     """
-    获取 Excel Characters 对象。
+    取得 Excel Characters 对象。
 
-    第一种方式：
-        使用 pywin32 早绑定生成的 GetCharacters。
+    优先使用 GetCharacters。
 
-    第二种方式：
-        如果出现“成员未找到”，直接通过 COM 调用
-        Excel Range.Characters 属性。
-
-    start_1_based：
-        Excel 使用的 1 开始索引。
+    某些 Excel 或 pywin32 环境会出现
+    “成员未找到”的错误，此时使用底层 COM 调用。
     """
     first_error: Exception | None = None
-
-    # ==========================================
-    # 方法一：GetCharacters
-    # ==========================================
 
     try:
         return cell.GetCharacters(
@@ -204,10 +210,6 @@ def get_characters(
 
     except Exception as error:
         first_error = error
-
-    # ==========================================
-    # 方法二：直接调用 Excel COM Characters
-    # ==========================================
 
     try:
         raw_characters = (
@@ -240,9 +242,9 @@ def get_characters(
 
     except Exception as error:
         raise RuntimeError(
-            "无法取得 Excel Characters 对象。\n"
-            f"GetCharacters 错误：{first_error}\n"
-            f"COM Characters 错误：{error}"
+            "无法取得 Excel Characters 对象。"
+            f"GetCharacters 错误：{first_error}；"
+            f"底层 COM 错误：{error}"
         ) from error
 
 
@@ -253,13 +255,10 @@ def set_partial_font_color(
     color: int,
 ) -> None:
     """
-    设置单元格内指定部分文字的字体颜色。
+    设置单元格中指定部分文字的字体颜色。
 
-    start_zero_based：
-        Python 的 0 开始索引。
-
-    Excel Characters：
-        使用 1 开始索引，所以需要加 1。
+    Python 的字符位置从 0 开始。
+    Excel 的字符位置从 1 开始。
     """
     characters = get_characters(
         cell,
@@ -278,7 +277,7 @@ def open_workbook(
     read_only: bool,
 ):
     """
-    启动独立 Excel 进程并打开工作簿。
+    使用独立的 Excel 进程打开工作簿。
     """
     excel = None
     workbook = None
@@ -305,6 +304,16 @@ def open_workbook(
             ReadOnly=read_only,
         )
 
+        if (
+            not read_only
+            and bool(workbook.ReadOnly)
+        ):
+            raise PermissionError(
+                "文件以只读方式打开。"
+                "请关闭正在打开的 Excel 文件，"
+                "并确认该文件不是只读文件。"
+            )
+
         yield workbook
 
     finally:
@@ -313,6 +322,7 @@ def open_workbook(
                 workbook.Close(
                     SaveChanges=False
                 )
+
         except Exception:
             pass
 
@@ -321,6 +331,7 @@ def open_workbook(
                 excel.EnableEvents = True
                 excel.ScreenUpdating = True
                 excel.Quit()
+
         except Exception:
             pass
 
@@ -335,24 +346,23 @@ class App:
     ) -> None:
         self.root = root
 
-        root.title(
+        self.root.title(
             APP_TITLE
         )
 
-        root.geometry(
-            "760x650"
+        self.root.geometry(
+            "760x610"
         )
 
-        root.minsize(
+        self.root.minsize(
             680,
-            580,
+            550,
         )
 
-        self.input_file = tk.StringVar()
-        self.output_file = tk.StringVar()
+        self.file_path = tk.StringVar()
         self.sheet_name = tk.StringVar()
 
-        self.cell_range = tk.StringVar(
+        self.range_text = tk.StringVar(
             value="BG7:BG28"
         )
 
@@ -395,12 +405,12 @@ class App:
         )
 
         # ========================================
-        # 1. 文件设置
+        # 文件
         # ========================================
 
         file_box = ttk.LabelFrame(
             main,
-            text="1. 文件设置",
+            text="1. 文件",
             padding=10,
         )
 
@@ -415,59 +425,40 @@ class App:
             row=0,
             column=0,
             sticky="w",
-            pady=5,
         )
 
         ttk.Entry(
             file_box,
-            textvariable=self.input_file,
+            textvariable=self.file_path,
         ).grid(
             row=0,
             column=1,
             sticky="ew",
             padx=8,
-            pady=5,
         )
 
         ttk.Button(
             file_box,
             text="选择文件",
-            command=self.choose_input,
+            command=self.choose_file,
         ).grid(
             row=0,
             column=2,
-            pady=5,
         )
 
         ttk.Label(
             file_box,
-            text="输出文件",
-        ).grid(
-            row=1,
-            column=0,
-            sticky="w",
-            pady=5,
-        )
-
-        ttk.Entry(
-            file_box,
-            textvariable=self.output_file,
+            text=(
+                "会直接保存到原文件。"
+                "请先备份文件，并关闭正在打开的 Excel。"
+            ),
         ).grid(
             row=1,
             column=1,
-            sticky="ew",
+            columnspan=2,
+            sticky="w",
             padx=8,
-            pady=5,
-        )
-
-        ttk.Button(
-            file_box,
-            text="选择位置",
-            command=self.choose_output,
-        ).grid(
-            row=1,
-            column=2,
-            pady=5,
+            pady=(6, 0),
         )
 
         file_box.columnconfigure(
@@ -476,12 +467,12 @@ class App:
         )
 
         # ========================================
-        # 2. 指定单元格和文字
+        # 指定位置和文字
         # ========================================
 
         target_box = ttk.LabelFrame(
             main,
-            text="2. 指定单元格和文字",
+            text="2. 指定位置和文字",
             padding=10,
         )
 
@@ -497,7 +488,6 @@ class App:
             row=0,
             column=0,
             sticky="w",
-            pady=5,
         )
 
         self.sheet_combo = ttk.Combobox(
@@ -511,7 +501,7 @@ class App:
             column=1,
             sticky="ew",
             padx=8,
-            pady=5,
+            pady=4,
         )
 
         ttk.Button(
@@ -521,7 +511,6 @@ class App:
         ).grid(
             row=0,
             column=2,
-            pady=5,
         )
 
         ttk.Label(
@@ -531,19 +520,18 @@ class App:
             row=1,
             column=0,
             sticky="w",
-            pady=5,
         )
 
         ttk.Entry(
             target_box,
-            textvariable=self.cell_range,
+            textvariable=self.range_text,
         ).grid(
             row=1,
             column=1,
             columnspan=2,
             sticky="ew",
             padx=(8, 0),
-            pady=5,
+            pady=4,
         )
 
         ttk.Label(
@@ -564,7 +552,6 @@ class App:
             row=3,
             column=0,
             sticky="w",
-            pady=8,
         )
 
         ttk.Entry(
@@ -607,7 +594,7 @@ class App:
         )
 
         # ========================================
-        # 3. 颜色和匹配方式
+        # 颜色和匹配方式
         # ========================================
 
         style_box = ttk.LabelFrame(
@@ -628,7 +615,6 @@ class App:
             row=0,
             column=0,
             sticky="w",
-            pady=5,
         )
 
         ttk.Button(
@@ -638,7 +624,6 @@ class App:
         ).grid(
             row=0,
             column=1,
-            sticky="w",
             padx=8,
         )
 
@@ -674,7 +659,7 @@ class App:
             row=1,
             column=0,
             sticky="w",
-            pady=5,
+            pady=(8, 0),
         )
 
         ttk.Combobox(
@@ -691,24 +676,25 @@ class App:
             column=1,
             sticky="w",
             padx=8,
+            pady=(8, 0),
         )
 
         # ========================================
-        # 按钮
+        # 操作按钮
         # ========================================
 
-        button_box = ttk.Frame(
+        action_box = ttk.Frame(
             main
         )
 
-        button_box.pack(
+        action_box.pack(
             fill="x",
             pady=(12, 0),
         )
 
         self.run_button = ttk.Button(
-            button_box,
-            text="开始处理",
+            action_box,
+            text="直接修改原文件",
             command=self.process,
         )
 
@@ -717,7 +703,7 @@ class App:
         )
 
         ttk.Button(
-            button_box,
+            action_box,
             text="清空日志",
             command=self.clear_log,
         ).pack(
@@ -777,7 +763,7 @@ class App:
             pady=(6, 0),
         )
 
-    def choose_input(
+    def choose_file(
         self,
     ) -> None:
         path = filedialog.askopenfilename(
@@ -797,77 +783,11 @@ class App:
         if not path:
             return
 
-        self.input_file.set(
+        self.file_path.set(
             path
         )
 
-        source = Path(path)
-
-        output = source.with_name(
-            f"{source.stem}_文字变色后"
-            f"{source.suffix}"
-        )
-
-        self.output_file.set(
-            str(output)
-        )
-
         self.load_sheets()
-
-    def choose_output(
-        self,
-    ) -> None:
-        input_value = (
-            self.input_file.get().strip()
-        )
-
-        if input_value:
-            source = Path(
-                input_value
-            )
-        else:
-            source = (
-                Path.cwd()
-                / "文字变色后.xlsx"
-            )
-
-        path = filedialog.asksaveasfilename(
-            title="选择输出文件",
-            initialdir=str(
-                source.parent
-            ),
-            initialfile=(
-                f"{source.stem}_文字变色后"
-                f"{source.suffix}"
-            ),
-            defaultextension=(
-                source.suffix
-                or ".xlsx"
-            ),
-            filetypes=[
-                (
-                    "Excel 工作簿",
-                    "*.xlsx",
-                ),
-                (
-                    "启用宏的工作簿",
-                    "*.xlsm",
-                ),
-                (
-                    "Excel 97-2003",
-                    "*.xls",
-                ),
-                (
-                    "Excel 二进制工作簿",
-                    "*.xlsb",
-                ),
-            ],
-        )
-
-        if path:
-            self.output_file.set(
-                path
-            )
 
     def choose_color(
         self,
@@ -899,9 +819,7 @@ class App:
     def update_color_preview(
         self,
     ) -> None:
-        red, green, blue = (
-            self.rgb
-        )
+        red, green, blue = self.rgb
 
         brightness = (
             red * 299
@@ -927,29 +845,27 @@ class App:
     def set_busy(
         self,
         busy: bool,
-        status: str | None = None,
+        text: str | None = None,
     ) -> None:
-        if busy:
-            self.run_button.configure(
-                state="disabled"
+        self.run_button.configure(
+            state=(
+                "disabled"
+                if busy
+                else "normal"
             )
+        )
 
-            self.root.configure(
-                cursor="wait"
+        self.root.configure(
+            cursor=(
+                "wait"
+                if busy
+                else ""
             )
+        )
 
-        else:
-            self.run_button.configure(
-                state="normal"
-            )
-
-            self.root.configure(
-                cursor=""
-            )
-
-        if status:
+        if text:
             self.status.set(
-                status
+                text
             )
 
         self.root.update_idletasks()
@@ -958,7 +874,7 @@ class App:
         self,
     ) -> None:
         path = Path(
-            self.input_file.get().strip()
+            self.file_path.get().strip()
         )
 
         if not path.exists():
@@ -1011,30 +927,29 @@ class App:
 
     def get_settings(
         self,
-        require_output: bool,
     ) -> dict:
-        input_file = Path(
-            self.input_file.get().strip()
+        path = Path(
+            self.file_path.get().strip()
         )
 
-        if not input_file.exists():
+        if not path.exists():
             raise ValueError(
                 "请选择有效的 Excel 文件。"
             )
 
         if (
-            input_file.suffix.lower()
+            path.suffix.lower()
             not in SUPPORTED_EXTENSIONS
         ):
             raise ValueError(
                 "只支持 xlsx、xlsm、xls、xlsb 文件。"
             )
 
-        sheet = (
+        sheet_name = (
             self.sheet_name.get().strip()
         )
 
-        if not sheet:
+        if not sheet_name:
             raise ValueError(
                 "请选择工作表。"
             )
@@ -1046,11 +961,11 @@ class App:
                 "请输入需要变色的文字。"
             )
 
-        config = {
-            "input": input_file,
-            "sheet": sheet,
+        return {
+            "path": path,
+            "sheet": sheet_name,
             "ranges": parse_ranges(
-                self.cell_range.get()
+                self.range_text.get()
             ),
             "keyword": keyword,
             "case_sensitive": (
@@ -1062,62 +977,25 @@ class App:
             "rgb": self.rgb,
         }
 
-        if require_output:
-            output_text = (
-                self.output_file.get().strip()
-            )
-
-            if not output_text:
-                raise ValueError(
-                    "请选择输出文件。"
-                )
-
-            output = Path(
-                output_text
-            )
-
-            if (
-                output.suffix.lower()
-                != input_file.suffix.lower()
-            ):
-                raise ValueError(
-                    "输出文件扩展名必须与原文件相同。"
-                )
-
-            if (
-                output.resolve()
-                == input_file.resolve()
-            ):
-                raise ValueError(
-                    "输出文件不能与原文件相同。"
-                )
-
-            config["output"] = output
-
-        return config
-
     def find_matches(
         self,
         worksheet,
-        config: dict,
+        settings: dict,
     ):
         checked = 0
         matches = []
-
         visited: set[str] = set()
 
-        for address in config["ranges"]:
+        for range_address in settings["ranges"]:
             try:
-                target_range = (
-                    worksheet.Range(
-                        address
-                    )
+                target_range = worksheet.Range(
+                    range_address
                 )
 
             except Exception as error:
                 raise ValueError(
                     f"无效的单元格或范围："
-                    f"{address}"
+                    f"{range_address}"
                 ) from error
 
             for raw_cell in target_range.Cells:
@@ -1125,15 +1003,15 @@ class App:
                     raw_cell
                 )
 
-                cell_address = (
-                    get_cell_address(cell)
+                address = get_cell_address(
+                    cell
                 )
 
-                if cell_address in visited:
+                if address in visited:
                     continue
 
                 visited.add(
-                    cell_address
+                    address
                 )
 
                 checked += 1
@@ -1149,15 +1027,13 @@ class App:
                     continue
 
                 positions = find_positions(
-                    source=text,
-                    keyword=config["keyword"],
-                    case_sensitive=config[
-                        "case_sensitive"
-                    ],
+                    text,
+                    settings["keyword"],
+                    settings["case_sensitive"],
                 )
 
                 if (
-                    config["match_mode"]
+                    settings["match_mode"]
                     == "只修改第一次"
                 ):
                     positions = positions[:1]
@@ -1179,9 +1055,7 @@ class App:
         self,
     ) -> None:
         try:
-            config = self.get_settings(
-                require_output=False
-            )
+            settings = self.get_settings()
 
         except ValueError as error:
             messagebox.showwarning(
@@ -1193,8 +1067,7 @@ class App:
         self.clear_log()
 
         self.append_log(
-            "开始检查匹配，"
-            "不会修改文件。\n\n"
+            "开始检查匹配，不会修改文件。\n\n"
         )
 
         self.set_busy(
@@ -1204,20 +1077,20 @@ class App:
 
         try:
             with open_workbook(
-                config["input"],
+                settings["path"],
                 read_only=True,
             ) as workbook:
 
                 worksheet = (
                     workbook.Worksheets(
-                        config["sheet"]
+                        settings["sheet"]
                     )
                 )
 
                 matches, checked = (
                     self.find_matches(
                         worksheet,
-                        config,
+                        settings,
                     )
                 )
 
@@ -1273,9 +1146,7 @@ class App:
         self,
     ) -> None:
         try:
-            config = self.get_settings(
-                require_output=True
-            )
+            settings = self.get_settings()
 
         except ValueError as error:
             messagebox.showwarning(
@@ -1284,28 +1155,25 @@ class App:
             )
             return
 
-        output: Path = config[
-            "output"
-        ]
+        path: Path = settings["path"]
 
-        if output.exists():
-            overwrite = (
-                messagebox.askyesno(
-                    APP_TITLE,
-                    "输出文件已经存在：\n\n"
-                    f"{output}\n\n"
-                    "是否覆盖？",
-                )
-            )
+        confirmed = messagebox.askyesno(
+            APP_TITLE,
+            "将直接修改并保存原文件：\n\n"
+            f"{path}\n\n"
+            "不会生成新文件。建议事先备份。\n"
+            "确定继续吗？",
+        )
 
-            if not overwrite:
-                return
+        if not confirmed:
+            return
 
         self.clear_log()
 
         self.append_log(
             "开始处理。\n"
-            "请先关闭原文件和输出文件。\n\n"
+            "请先关闭正在打开的 Excel 文件。\n\n"
+            f"原文件：\n{path}\n\n"
         )
 
         self.set_busy(
@@ -1314,48 +1182,29 @@ class App:
         )
 
         try:
-            output.parent.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            shutil.copy2(
-                config["input"],
-                output,
-            )
-
-            self.append_log(
-                "已生成副本：\n"
-                f"{output}\n\n"
-            )
-
             with open_workbook(
-                output,
+                path,
                 read_only=False,
             ) as workbook:
 
                 worksheet = (
                     workbook.Worksheets(
-                        config["sheet"]
+                        settings["sheet"]
                     )
                 )
 
                 matches, checked = (
                     self.find_matches(
                         worksheet,
-                        config,
+                        settings,
                     )
                 )
 
                 excel_color = (
                     rgb_to_excel_color(
-                        config["rgb"]
+                        settings["rgb"]
                     )
                 )
-
-                success = 0
-                failed = 0
-                formula_skipped = 0
 
                 total = sum(
                     len(positions)
@@ -1363,9 +1212,13 @@ class App:
                     in matches
                 )
 
+                success = 0
+                failed = 0
+                formula_skipped = 0
+
                 for cell, positions in matches:
-                    address = (
-                        get_cell_address(cell)
+                    address = get_cell_address(
+                        cell
                     )
 
                     if is_formula_cell(cell):
@@ -1375,7 +1228,7 @@ class App:
 
                         self.append_log(
                             f"[跳过] {address}："
-                            "公式单元格。\n"
+                            f"公式单元格。\n"
                         )
 
                         continue
@@ -1385,12 +1238,12 @@ class App:
                     for position in positions:
                         try:
                             set_partial_font_color(
-                                cell=cell,
-                                start_zero_based=position,
-                                length=len(
-                                    config["keyword"]
+                                cell,
+                                position,
+                                len(
+                                    settings["keyword"]
                                 ),
-                                color=excel_color,
+                                excel_color,
                             )
 
                             success += 1
@@ -1403,7 +1256,7 @@ class App:
                                 f"[失败] {address}："
                                 f"开始位置 {position + 1}，"
                                 f"长度 "
-                                f"{len(config['keyword'])}；"
+                                f"{len(settings['keyword'])}；"
                                 f"{error}\n"
                             )
 
@@ -1414,6 +1267,7 @@ class App:
                             f"{changed_here} 处。\n"
                         )
 
+                # 直接保存原文件
                 workbook.Save()
 
             self.append_log(
@@ -1423,7 +1277,7 @@ class App:
                 f"成功变色：{success}\n"
                 f"公式跳过：{formula_skipped}\n"
                 f"失败：{failed}\n"
-                f"保存位置：{output}\n"
+                f"已保存原文件：{path}\n"
             )
 
             self.status.set(
@@ -1431,32 +1285,19 @@ class App:
                 f"{success} 处。"
             )
 
-            if (
-                success > 0
-                and failed == 0
-            ):
-                messagebox.showinfo(
-                    APP_TITLE,
-                    "处理完成。\n\n"
-                    f"成功变色：{success} 处\n\n"
-                    "保存位置：\n"
-                    f"{output}",
-                )
+            messagebox.showinfo(
+                APP_TITLE,
+                "处理完成。\n\n"
+                f"成功变色：{success}\n"
+                f"公式跳过：{formula_skipped}\n"
+                f"失败：{failed}\n\n"
+                f"已保存到原文件：\n"
+                f"{path}",
+            )
 
-            else:
-                messagebox.showwarning(
-                    APP_TITLE,
-                    "处理结束。\n\n"
-                    f"成功：{success}\n"
-                    f"公式跳过：{formula_skipped}\n"
-                    f"失败：{failed}\n\n"
-                    "请查看处理日志。",
-                )
-
-        except PermissionError:
+        except PermissionError as error:
             self.show_error(
-                "文件无法写入。"
-                "请关闭正在打开的 Excel 文件后再试。"
+                str(error)
             )
 
         except Exception as error:
