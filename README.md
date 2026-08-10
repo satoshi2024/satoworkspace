@@ -1,5 +1,3 @@
-$0.width
-$0.height
-$0.getBoundingClientRect().width
-$0.getBoundingClientRect().height
-window.devicePixelRatio
+お疲れ様です。
+修正前・修正後の画像を送ります。
+修正後は以前より鮮明になっているように見えますが、この状態で問題ないかご確認いただけますでしょうか。
