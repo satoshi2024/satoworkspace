@@ -1,3 +1,30 @@
-| No | 種別 | 遷移元画面 | アクション・条件 | 遷移先画面/帳票 | 確認内容 |
-|---|---|---|---|---|---|
-| 001-001 | 14 | 事業所検索画面 | E-Mail項目に宛名基本情報（MAIL_ADS）に登録されているメールアドレス（数字6桁等）を入力し、検索を実行する。 | 事業所検索画面 | 該当する宛名基本情報に紐づく事業所が検索結果一覧に正しく表示されること。 |
+const viewer = document.querySelector("image-viewer");
+const bg = viewer.shadowRoot.querySelector("#background-layer");
+const ui = viewer.shadowRoot.querySelector("#ui-layer");
+
+console.log("background attribute:",
+    bg.getAttribute("width"),
+    bg.getAttribute("height"));
+
+console.log("background real:",
+    bg.width,
+    bg.height);
+
+console.log("background display:",
+    bg.getBoundingClientRect().width,
+    bg.getBoundingClientRect().height);
+
+console.log("ui attribute:",
+    ui.getAttribute("width"),
+    ui.getAttribute("height"));
+
+console.log("ui real:",
+    ui.width,
+    ui.height);
+
+console.log("ui display:",
+    ui.getBoundingClientRect().width,
+    ui.getBoundingClientRect().height);
+
+console.log("devicePixelRatio:",
+    window.devicePixelRatio);
