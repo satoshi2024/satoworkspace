@@ -1,1 +1,4 @@
-String cmd = "gs -q -dNOPAUSE -dBATCH -dSAFER -sDEVICE=tiffgray -r300 -dTextAlphaBits=4 -dGraphicsAlphaBits=4 -sOutputFile=" + tifFullName + " " + pdfFullName;
+适合在 Teams お疲れ様です。
+QA #28590（イメージ照会の画質劣化）についてご相談です。
+現在、バックエンド（Ghostscriptの解像度・フォーマット・平滑化オプション調整）およびフロントエンド（Canvasのアンチエイリアス・段階的縮小処理など）の両面から考えられる対策をすべて試したのですが、ブラウザ（Canvas/Tiff.js）の描画仕様の限界もあり、「1アップ」時の文字の鮮明さが現行（ActiveX）レベルまで改善しきれていません。
+技術的に打てる手は一通り出し尽くした状態なのですが、今後の進め方（運用での回避や仕様調整、または別ライブラリ検討など）について何かアドバイスをいただけますでしょうか。よろしくお願いいたします。
