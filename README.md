@@ -1,21 +1,9 @@
-DELETE FROM  WHERE KOJIN_NO = 9999002;
-DELETE FROM  WHERE FUYO_KOJIN_NO = 9999002;
+お疲れ様です。
+〇〇（あなたの名前）です。
 
--- 插入表 (所得额 100000，满足 <= 48万 的条件)
-INSERT INTO  (
-    KOJIN_NO, NENDOBUN, GOKEI_SHOTOKU_KIGK, SHINKOKU_KBN,
-    SYS_SAKUSEIBI, SYS_KOSHINBI, SYS_JIKAN
-) VALUES (
-    9999002, 2026, 100000, '1', 
-    '20260917', '20260917', '150000' -- ★★必须跟上面的时间一模一样★★
-);
+SQLの修正依頼について、1点確認させてください。
 
--- 插入表
-INSERT INTO  (
-    KOJIN_NO, NENDOBUN, FUYO_KOJIN_NO, FUYOKANKEI_CD, 
-    SYS_SAKUSEIBI, SYS_KOSHINBI, SYS_JIKAN
-) VALUES (
-    '8888002', 2026, 9999002, '62', 
-    '20260917', '20260917', '150000' -- ★★必须跟上面的时间一模一样★★
-);
-COMMIT;
+「特別徴収税額決定、変更通知変更通知に絞り込むように条件追加する」というコメントを拝見しました。
+こちらについて、具体的にWHERE句に追加すべき条件（対象となるカラム名と、指定すべき値）を教えていただけないでしょうか。
+
+よろしくお願いいたします。
