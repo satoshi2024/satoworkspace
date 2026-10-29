@@ -1,3 +1,23 @@
-3-1. では、給与所得控除額の算定（最低保障額の適用）及び年末調整給与収入の算定を共通部品（課税計算パッケージ）の給与所得算出（）で実施しており、今回の最低保障額引き上げ（令和9・10年度特例措置含む）及び端数処理の見直しは課税年度2027年度以降が対象となるため、年度判定による処理の追加・見直しを行う。
-・今回のインプットとなる課税資料をもとに、各パターンのテストデータを作成し、給与所得控除額および年末調整給与収入（給与所得）が期待どおりに算定・設定されることを確認する。
-・給与所得の算出結果が影響する後続の税額計算処理についても、テスト時に期待どおりの結果となることを確認する。
+
+Sub 給報に削除線を追加()
+
+    Dim c As Range
+    Dim p As Long
+    Dim startPos As Long
+
+    For Each c In Selection.Cells
+        If Not c.HasFormula Then
+            If VarType(c.Value2) = vbString Then
+                startPos = 1
+                Do
+                    p = InStr(startPos, c.Value2, "給報")
+                    If p = 0 Then Exit Do
+
+                    c.Characters(p, 2).Font.Strikethrough = True
+                    startPos = p + 2
+                Loop
+            End If
+        End If
+    Next c
+
+End Sub
