@@ -1,0 +1,163 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>式样书指摘对应整理（脱敏版）</title><style>
+:root{color-scheme:light;--ink:#202633;--sub:#556274;--line:#d9e1ec;--accent:#214d75;--paper:#fff}
+*{box-sizing:border-box}html{font-size:16px}body{background:#f4f6f9;color:var(--ink);font-family:system-ui,-apple-system,'Yu Gothic','Meiryo','Microsoft YaHei',sans-serif;line-height:1.75;margin:0;padding:28px 18px}
+article{max-width:980px;margin:auto;background:var(--paper);padding:44px 50px;box-shadow:0 8px 30px #27384912;border-radius:12px}
+h1{font-size:1.9rem;line-height:1.25;margin:0 0 22px;color:#193d60}h2{font-size:1.35rem;color:#193d60;border-bottom:2px solid #dfe8f1;margin-top:36px;padding-bottom:10px}h3{font-size:1.12rem;margin:28px 0 12px}
+blockquote{margin:16px 0;padding:12px 18px;border-left:4px solid #8397ae;background:#f2f5f9;color:#354456}p,li{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;font-size:.94rem;margin:16px 0 20px}th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}th{background:#eaf0f6;color:#213c54}tr:nth-child(even) td{background:#fbfcfe}
+pre{background:#f5f7fa;border:1px solid var(--line);border-radius:8px;padding:14px 17px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75;font-family:'Yu Gothic','Meiryo',sans-serif;font-size:.92rem}code{font-family:inherit}strong{color:#183c5b}
+@media(max-width:720px){body{padding:0}article{padding:20px;border-radius:0}h1{font-size:1.5rem}table{display:block;overflow-x:auto}}@media print{body{padding:0;background:#fff}article{box-shadow:none;padding:0;max-width:none}h2{break-after:avoid}pre,table{break-inside:avoid}}
+</style></head><body><article><h1>式样书指摘对应整理（脱敏版）</h1>
+<blockquote>
+<p><strong>文件用途</strong>：用于上传到工作电脑的修改指南。原始系统名、程序名、SQL 文件名及函数名均以代号代替；本文件<strong>不包含</strong>代号与真实名称的对应关系。需要查找真实名称时，请只在私人聊天中查看，不要把对应关系复制到工作电脑。</p>
+</blockquote>
+<h2>一、整体对应方针</h2>
+<p>这 3 条指摘集中在判定条件、确认方法、后续税额计算对象的明确化。尽量沿用现有式样书，以追加文字为主，不重画流程图，也不全面重写已完成的程序明细。</p>
+<table>
+<thead>
+<tr>
+  <th>指摘</th>
+  <th>问题</th>
+  <th>建议修改位置</th>
+  <th>处理要点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>No.1</td>
+  <td>年度条件、边界值及例外条件不够明确</td>
+  <td>改修方针约第 12～16 行；对象处理明细</td>
+  <td>追加年度条件和判定原则，并复核个别条件</td>
+</tr>
+<tr>
+  <td>No.2</td>
+  <td>「確認方法」的期待结果过于笼统</td>
+  <td>約第 155～158 行；画面、一括処理、連携</td>
+  <td>明确输入条件、判定结果和核对项目</td>
+</tr>
+<tr>
+  <td>No.3</td>
+  <td>「後続の税額計算処理」范围不明确</td>
+  <td>約第 155～158 行</td>
+  <td>明确课税计算处理【程序B】，并核对调用关系</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>行号按现有截图估计，请在 Excel 中以对应标题为准。</p>
+</blockquote>
+<h2>二、指摘 No.1：年度别判定条件、例外条件</h2>
+<h3>1. 修改位置</h3>
+<p>「機能設計書」→「2.業務システム【系统S】の改修方針」附近，约第 12～16 行。保留原有处理方针，在其后追加下面的日文说明：</p>
+<pre><code class="language-text">・2027年度分以降（2027年度を含む）は、同一生計配偶者・扶養親族の合計所得金額の判定基準を58万円以下から62万円以下に変更する。
+
+・2027年度分以降（2027年度を含む）は、勤労学生の合計所得金額の判定基準を85万円以下から89万円以下に変更する。
+
+・2026年度分以前については、既存の年度別判定条件を維持する。
+
+・配偶者特別控除等の個別条件については、各対象処理の機能詳細に記載した判定条件に従う。
+
+・各処理について、対象年度、所得金額の境界値、判定条件の成立・不成立、および既存年度への影響有無を確認する。
+</code></pre>
+<h3>2. 核对对象</h3>
+<table>
+<thead>
+<tr>
+  <th>代号</th>
+  <th>本文中用于识别的处理类别</th>
+  <th>重点确认</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>【程序A】</td>
+  <td>画面エラーチェック</td>
+  <td>输入金额、年度与错误显示的对应关系</td>
+</tr>
+<tr>
+  <td>【程序B】</td>
+  <td>課税計算パッケージ</td>
+  <td>人的控除额及相关计算结果</td>
+</tr>
+<tr>
+  <td>【程序C】</td>
+  <td>扶養関係チェック</td>
+  <td>对象与非对象的判断</td>
+</tr>
+<tr>
+  <td>【程序D】</td>
+  <td>扶養関係情報の中間ファイル作成</td>
+  <td>文件内容及判定结果</td>
+</tr>
+<tr>
+  <td>【程序E】</td>
+  <td>合算処理パッケージ</td>
+  <td>合算对象及年度判定</td>
+</tr>
+<tr>
+  <td>【函数F】</td>
+  <td>配偶者特別控除算出</td>
+  <td>个别条件与计算边界</td>
+</tr>
+</tbody>
+</table>
+<p>建议优先核对 620,000／620,001 円与 890,000／890,001 円等边界值，以及 2026／2027 年度切换。具体期待结果应以每项处理的设计逻辑为准；<strong>不能一律写成「エラー」</strong>。</p>
+<h3>3. 指摘回复模板（实际修改完成后使用）</h3>
+<pre><code class="language-text">ご指摘のとおり、改修後の判定条件および確認すべき境界値が明確になるよう、改修方針に年度別の所得要件と確認観点を追記しました。
+
+また、対象画面・対象帳票・対象プログラムに記載している個別の判定条件についても、年度分岐および例外条件の記載漏れがないか確認し、必要な内容をテスト仕様書へ反映します。
+</code></pre>
+<h2>三、指摘 No.2：「確認方法」期待结果不具体</h2>
+<h3>1. 主要修改位置</h3>
+<p>「(6)確認系」→「確認方法」附近，约第 155～158 行。将「正常に動作すること」「期待どおりの結果となること」等泛泛描述，换为能够对应输入与结果的具体确认项目。</p>
+<pre><code class="language-text">（確認方法）
+
+・今回の改修対象となる課税資料をもとに、2026年度分および2027年度分以降のテストデータを作成し、年度別の所得要件に従って判定されることを確認する。
+
+・同一生計配偶者・扶養親族については、2027年度分以降の合計所得金額62万円以下／62万円超の境界値を確認する。
+
+・勤労学生については、2027年度分以降の合計所得金額89万円以下／89万円超の境界値を確認する。
+
+・2026年度分以前については、既存の年度別判定条件に従った結果となることを確認する。
+
+・各判定結果に応じて、エラーメッセージ、控除対象者の判定および人的控除額が、機能詳細に記載した条件と一致することを確認する。
+</code></pre>
+<h3>2. 在三种处理类型中各补充一句</h3>
+<p><strong>(1) 画面</strong></p>
+<pre><code class="language-text">・対象年度および所得金額に応じて、改修後の判定条件に従ったエラーメッセージの表示有無、控除対象者の判定結果が正しいことを確認する。
+</code></pre>
+<p><strong>(2) 一括処理</strong></p>
+<pre><code class="language-text">・2026年度分および2027年度分以降のテストデータを用い、各一括処理において、年度別の所得要件に従った判定結果および計算結果が出力されることを確認する。
+</code></pre>
+<p><strong>(5) 連携</strong></p>
+<pre><code class="language-text">・2026年度分および2027年度分の連携データについて、改修後の判定結果および関連項目が連携先へ正しく反映され、年度別のデータに欠落や不整合が発生しないことを確認する。
+</code></pre>
+<h3>3. 指摘回复模板（实际修改完成后使用）</h3>
+<pre><code class="language-text">ご指摘のとおり、確認方法における期待結果の記載が抽象的であったため、対象年度、所得金額の境界値および具体的な確認項目を追記しました。
+
+また、画面・一括処理・連携についても、判定結果や出力内容の確認観点を明確化しました。
+</code></pre>
+<h2>四、指摘 No.3：明确「後続の税額計算処理」</h2>
+<h3>1. 修改位置</h3>
+<p>同样是「(6)確認系」→「確認方法」，约第 155～158 行。不要只写「後続の処理」，应尽可能明确程序范围和确认内容。</p>
+<h3>2. 替换建议（日文）</h3>
+<pre><code class="language-text">・同一生計配偶者、扶養親族、勤労学生の所得要件の変更結果が影響する課税計算パッケージ（【程序B】）等について、改修後の判定条件に従って人的控除額および課税計算結果が正しく算出されることを確認する。
+
+・各処理の具体的な対象範囲については、「(5)対象画面・対象帳票・対象プログラム」に記載した機能詳細を参照する。
+</code></pre>
+<p><strong>注意</strong>：「等」仍然可能被进一步追问。应在核对真实调用关系后，把所有确实属于后续计算范围的程序明确列出。当前截图能确认【程序B】属于课税计算处理，但无法仅根据程序一览断定其余所有处理的直接前后调用关系。</p>
+<h3>3. 指摘回复模板（实际修改完成后使用）</h3>
+<pre><code class="language-text">ご指摘のとおり、「後続の税額計算処理」の対象が不明確であったため、確認対象となる課税計算パッケージの名称および確認内容を追記しました。
+
+また、対象プログラムの機能詳細を参照できるよう記載を見直しました。
+</code></pre>
+<h2>五、推荐的最小修改步骤</h2>
+<ol>
+<li>在改修方针中追加年度条件与边界值说明。</li>
+<li>在「確認方法」中明确输入数据、判定条件、预期结果。</li>
+<li>在「画面」「一括処理」「連携」分别补充确认观点评价句。</li>
+<li>将「後続の税額計算処理」改成明确的【程序B】等实际受影响对象；必要时核对调用关系后去掉「等」。</li>
+<li>复核现有程序明细与测试式样书，完成修改后再填写指摘回复。</li>
+</ol>
+<h2>六、保密说明</h2>
+<p>本文件使用【系统S】【程序A～E】【函数F】作为脱敏代号，<strong>没有保存任何代号到真实程序名的映射</strong>。这类信息应只在私人端查阅；不要把包含对应关系的聊天记录、截图或其他附件上传到工作电脑。此文件本身仍包含项目年度、业务领域与判定规则；如果这些也属于公司保密信息，上传前仍需要按公司规定处理。</p>
+</article></body></html>
