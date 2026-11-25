@@ -1,7 +1,19 @@
-WBS上の「IT2_差分保証」のテスト仕様書についてですが、テスト原本が見つかりませんでした。
-
-ただし、以下のパスに「IT2_現行保証」の原本がありました。
-
-パス：aa/bb/it2_現行保証
-
-こちらの原本の内容を参考にして、今回の「IT2_差分保証」のテスト仕様書を作成してもよろしいでしょうか。
+SELECT 
+    s.sid,
+    s.serial#,
+    s.username,
+    s.status,
+    s.machine,
+    s.program,
+    s.sql_id,
+    q.sql_text,
+    'ALTER SYSTEM KILL SESSION ''' || s.sid || ',' || s.serial# || ''' IMMEDIATE;' AS kill_sql
+FROM 
+    v$session s
+LEFT JOIN 
+    v$sql q ON s.sql_id = q.sql_id
+WHERE 
+    s.type != 'BACKGROUND'
+    AND s.status = 'ACTIVE' -- 如果要查所有连接（含空闲），可注释掉此行
+ORDER BY 
+    s.logon_time DESC;
